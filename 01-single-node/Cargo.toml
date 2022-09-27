@@ -11,4 +11,5 @@ path = "src/client.rs"
 name = "node"
 path = "src/node.rs"
 
-[dependencies]
+[dependencies.network]
+path = "../network"

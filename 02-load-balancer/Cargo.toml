@@ -15,4 +15,5 @@ path = "src/balancer.rs"
 name = "server"
 path = "src/server.rs"
 
-[dependencies]
+[dependencies.network]
+path = "../network"
