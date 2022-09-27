@@ -1,0 +1,15 @@
+[package]
+name = "single_node"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "client"
+path = "src/client.rs"
+
+[[bin]]
+name = "node"
+path = "src/node.rs"
+
+[dependencies.network]
+path = "../network"
