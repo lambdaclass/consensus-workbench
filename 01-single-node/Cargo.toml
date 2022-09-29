@@ -11,5 +11,8 @@ path = "src/client.rs"
 name = "node"
 path = "src/node.rs"
 
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+
 [dependencies.network]
 path = "../network"
