@@ -14,6 +14,7 @@ struct PingHandler;
 impl MessageHandler for PingHandler {
     async fn dispatch(&self, writer: &mut Writer, message: Bytes) -> Result<(), Box<dyn Error>> {
         info!("Received request {:?}", message);
+        // echo the same message to the client
         writer.send(message).await.map_err(|e| e.into())
     }
 }
