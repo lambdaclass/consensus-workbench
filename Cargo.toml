@@ -7,22 +7,27 @@ publish = false
 [lib]
 name = "network"
 path = "src/network/lib.rs"
+doctest = false
 
 [[bin]]
 name = "client"
 path = "src/client.rs"
+test = false
 
 [[bin]]
 name = "single_node"
 path = "src/single_node/node.rs"
+test = false
 
 [[bin]]
 name = "primary"
 path = "src/primary_backup/primary.rs"
+test = false
 
 [[bin]]
 name = "backup"
 path = "src/primary_backup/backup.rs"
+test = false
 
 [dependencies]
 tokio = { version = "1.5.0", features = ["rt", "net", "sync", "macros", "time", "rt-multi-thread"] }
