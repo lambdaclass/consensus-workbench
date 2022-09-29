@@ -23,8 +23,8 @@ async fn main() -> Result<(), Error> {
 
     match cancel_handler.await {
         Ok(response) => {
-            let pepe: PingMessage = bincode::deserialize(&response)?;
-            info!("received response: {:?}", pepe);
+            let response: PingMessage = bincode::deserialize(&response)?;
+            info!("received response: {:?}", response);
             Ok(())
         }
         Err(error) => Err(error.into()),
