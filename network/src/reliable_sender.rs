@@ -3,7 +3,7 @@ use crate::error::NetworkError;
 use bytes::Bytes;
 use futures::sink::SinkExt as _;
 use futures::stream::StreamExt as _;
-use log::{info, warn};
+use log::{debug, warn};
 use rand::prelude::SliceRandom as _;
 use rand::rngs::SmallRng;
 use rand::SeedableRng as _;
@@ -143,7 +143,7 @@ impl Connection {
         loop {
             match TcpStream::connect(self.address).await {
                 Ok(stream) => {
-                    info!("Outgoing connection established with {}", self.address);
+                    debug!("Outgoing connection established with {}", self.address);
 
                     // Reset the delay.
                     delay = self.retry_delay;

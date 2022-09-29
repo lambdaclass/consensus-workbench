@@ -2,13 +2,14 @@ use std::net::SocketAddr;
 
 use bytes::Bytes;
 use network::ReliableSender;
+use log::info;
 
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    simple_logger::SimpleLogger::new().env().init().unwrap();
+    simple_logger::SimpleLogger::new().env().with_level(log::LevelFilter::Info).init().unwrap();
 
     // using a reliable sender to get a response back
     let mut sender = ReliableSender::new();
@@ -18,11 +19,9 @@ async fn main() -> Result<(), Error> {
 
     match cancel_handler.await {
         Ok(response) => {
-            println!("received response: {:?}", response);
+            info!("received response: {:?}", response);
             Ok(())
         },
-        // FIXME necessary?
         Err(error) => Err(error.into())
     }
-
 }

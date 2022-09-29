@@ -20,7 +20,7 @@ impl MessageHandler for PingHandler {
 
 #[tokio::main]
 async fn main() {
-    simple_logger::SimpleLogger::new().env().init().unwrap();
+    simple_logger::SimpleLogger::new().env().with_level(log::LevelFilter::Info).init().unwrap();
 
     let address = "127.0.0.1:6100".parse::<SocketAddr>().unwrap();
     Receiver::spawn(address, PingHandler).await.unwrap()
