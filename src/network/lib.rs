@@ -11,3 +11,6 @@ pub mod common;
 pub use crate::receiver::{MessageHandler, Receiver, Writer};
 pub use crate::reliable_sender::{CancelHandler, ReliableSender};
 pub use crate::simple_sender::SimpleSender;
+
+// declaring a ping module for temporary tests
+pub mod ping;

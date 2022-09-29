@@ -2,10 +2,9 @@ use std::net::SocketAddr;
 
 use bytes::Bytes;
 use network::ReliableSender;
+use network::ping::PingMessage;
 use log::info;
 
-mod single_node;
-use single_node::node::PingMessage;
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
