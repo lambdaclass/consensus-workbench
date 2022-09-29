@@ -4,7 +4,6 @@ use bytes::Bytes;
 use network::ReliableSender;
 use log::info;
 
-
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
 #[tokio::main]
