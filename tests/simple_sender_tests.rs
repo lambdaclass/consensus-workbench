@@ -1,7 +1,12 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use super::*;
-use crate::common::listener;
+mod common;
+
+use common::listener;
 use futures::future::try_join_all;
+
+use bytes::Bytes;
+use network::SimpleSender;
+use std::net::SocketAddr;
 
 #[tokio::test]
 async fn simple_send() {
