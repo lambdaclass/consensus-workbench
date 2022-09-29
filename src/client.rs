@@ -1,16 +1,19 @@
 use std::net::SocketAddr;
 
 use bytes::Bytes;
-use network::ReliableSender;
-use network::ping::PingMessage;
 use log::info;
-
+use network::ping::PingMessage;
+use network::ReliableSender;
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    simple_logger::SimpleLogger::new().env().with_level(log::LevelFilter::Info).init().unwrap();
+    simple_logger::SimpleLogger::new()
+        .env()
+        .with_level(log::LevelFilter::Info)
+        .init()
+        .unwrap();
 
     // using a reliable sender to get a response back
     let mut sender = ReliableSender::new();
@@ -23,7 +26,7 @@ async fn main() -> Result<(), Error> {
             let pepe: PingMessage = bincode::deserialize(&response)?;
             info!("received response: {:?}", pepe);
             Ok(())
-        },
-        Err(error) => Err(error.into())
+        }
+        Err(error) => Err(error.into()),
     }
 }

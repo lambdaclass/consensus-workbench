@@ -4,5 +4,5 @@ use serde::{Deserialize, Serialize};
 pub enum PingMessage {
     Ping,
     Pong,
-    Other(String)
+    Other(String),
 }

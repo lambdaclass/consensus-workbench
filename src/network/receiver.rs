@@ -5,15 +5,11 @@ use bytes::Bytes;
 use futures::stream::SplitSink;
 use futures::stream::StreamExt as _;
 use log::{debug, warn};
-use tokio::task::JoinHandle;
 use std::error::Error;
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::task::JoinHandle;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
-
-#[cfg(test)]
-#[path = "tests/receiver_tests.rs"]
-pub mod receiver_tests;
 
 /// Convenient alias for the writer end of the TCP channel.
 pub type Writer = SplitSink<Framed<TcpStream, LengthDelimitedCodec>, Bytes>;
@@ -38,10 +34,8 @@ pub struct Receiver<Handler: MessageHandler> {
 
 impl<Handler: MessageHandler> Receiver<Handler> {
     /// Spawn a new network receiver handling connections from any incoming peer.
-    pub fn spawn(address: SocketAddr, handler: Handler) -> JoinHandle <()> {
-        tokio::spawn(async move {
-            Self { address, handler }.run().await
-        })
+    pub fn spawn(address: SocketAddr, handler: Handler) -> JoinHandle<()> {
+        tokio::spawn(async move { Self { address, handler }.run().await })
     }
 
     /// Main loop responsible to accept incoming connections and spawn a new runner to handle it.
