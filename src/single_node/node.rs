@@ -4,18 +4,33 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use std::error::Error;
 use log::info;
+use serde::{Deserialize, Serialize};
 
 use std::net::SocketAddr;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum PingMessage {
+    Ping,
+    Pong,
+    Other(String)
+}
 
 #[derive(Clone)]
 struct PingHandler;
 
 #[async_trait]
 impl MessageHandler for PingHandler {
-    async fn dispatch(&self, writer: &mut Writer, message: Bytes) -> Result<(), Box<dyn Error>> {
-        info!("Received request {:?}", message);
-        // echo the same message to the client
-        writer.send(message).await.map_err(|e| e.into())
+    async fn dispatch(&self, writer: &mut Writer, bytes: Bytes) -> Result<(), Box<dyn Error>> {
+        let request = bincode::deserialize(&bytes)?;
+        info!("Received request {:?}", request);
+
+        let reply =
+        match request {
+            PingMessage::Ping => PingMessage::Pong,
+            _ => PingMessage::Other("unsupported message".to_string()),
+        };
+        let reply: Bytes = bincode::serialize(&reply)?.into();
+        writer.send(reply).await.map_err(|e| e.into())
     }
 }
 
