@@ -37,17 +37,20 @@ impl MessageHandler for PingHandler {
 
         let reply = match request {
             KeyValueCommand::Set { key, value } => {
-                self.store.write(key, value).await;
+                self.store
+                    .write(key.clone().into(), value.clone().into())
+                    .await;
 
-                // FIXME add error handling
-                let result: Result<Option<Vec<u8>>, ()> = Ok(None);
+                let result: Result<Option<String>, String> = Ok(Some(value));
                 bincode::serialize(&result)?.into()
             }
             KeyValueCommand::Get { key } => {
-                let value = self.store.read(key).await.unwrap();
+                let result = self
+                    .store
+                    .read(key.clone().into())
+                    .await
+                    .map_err(|_| "error reading store");
 
-                // FIXME add error handling,
-                let result: Result<Option<Vec<u8>>, ()> = Ok(value);
                 bincode::serialize(&result)?.into()
             }
         };

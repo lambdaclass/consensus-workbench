@@ -16,9 +16,10 @@ struct Cli {
     /// The network address of the node where to send txs.
     #[clap(short, long, value_parser, value_name = "INT", default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
     address: IpAddr,
-    /// FIXME
+    /// The key to get or set in the DB
     key: String,
-    /// FIXME
+    /// The value to set to the key in the DB. If omitted, the key is retrieved from the DB.
+    // TODO consider explicitly passing get/set commands
     value: Option<String>,
 }
 
@@ -38,16 +39,13 @@ async fn main() -> Result<(), Error> {
     let mut sender = ReliableSender::new();
     let address = SocketAddr::new(cli.address, cli.port);
 
-    // TODO consider explicitly choosing get or set in the args
     let command = if let Some(value) = cli.value {
         KeyValueCommand::Set {
-            key: cli.key.into(),
-            value: value.into(),
+            key: cli.key,
+            value,
         }
     } else {
-        KeyValueCommand::Get {
-            key: cli.key.into(),
-        }
+        KeyValueCommand::Get { key: cli.key }
     };
 
     let message: Bytes = bincode::serialize(&command)?.into();
@@ -55,14 +53,13 @@ async fn main() -> Result<(), Error> {
 
     match cancel_handler.await {
         Ok(response) => {
-            let response: Result<Option<Vec<u8>>, ()> =
+            let response: Result<Option<String>, String> =
                 bincode::deserialize(&response).expect("failed to deserialize response");
 
-            match (command, response) {
-                (_, Ok(Some(value))) => info!("{}", String::from_utf8_lossy(&value)),
-                (KeyValueCommand::Get { .. }, Ok(None)) => info!("NOT FOUND"),
-                (KeyValueCommand::Set { .. }, Ok(_)) => info!("OK"),
-                _error => error!("ERROR"),
+            match response {
+                Ok(Some(value)) => info!("{}", value),
+                Ok(None) => info!("null"),
+                Err(error) => error!("ERROR {}", error),
             }
             Ok(())
         }

@@ -9,6 +9,6 @@ pub enum PingMessage {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum KeyValueCommand {
-    Set { key: Vec<u8>, value: Vec<u8> },
-    Get { key: Vec<u8> },
+    Set { key: String, value: String },
+    Get { key: String },
 }
