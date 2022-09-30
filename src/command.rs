@@ -6,3 +6,9 @@ pub enum PingMessage {
     Pong,
     Other(String),
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum KeyValueCommand {
+    Set { key: Vec<u8>, value: Vec<u8> },
+    Get { key: Vec<u8> },
+}

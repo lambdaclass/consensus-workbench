@@ -1,16 +1,21 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::sink::SinkExt as _;
-use lib::network::{MessageHandler, Receiver, Writer};
+use lib::{
+    network::{MessageHandler, Receiver, Writer},
+    store::Store,
+};
 use log::info;
 use std::error::Error;
 
-use lib::command::PingMessage;
+use lib::command::KeyValueCommand;
 
 use std::net::SocketAddr;
 
 #[derive(Clone)]
-struct PingHandler;
+struct PingHandler {
+    pub store: Store,
+}
 
 #[async_trait]
 impl MessageHandler for PingHandler {
@@ -19,10 +24,21 @@ impl MessageHandler for PingHandler {
         info!("Received request {:?}", request);
 
         let reply = match request {
-            PingMessage::Ping => PingMessage::Pong,
-            _ => PingMessage::Other("unsupported message".to_string()),
+            KeyValueCommand::Set { key, value } => {
+                self.store.write(key, value).await;
+
+                // FIXME add error handling
+                let result: Result<(), ()> = Ok(());
+                bincode::serialize(&result)?.into()
+            }
+            KeyValueCommand::Get { key } => {
+                let value = self.store.read(key).await.unwrap();
+
+                // FIXME add error handling,
+                let result: Result<Option<Vec<u8>>, ()> = Ok(value);
+                bincode::serialize(&result)?.into()
+            }
         };
-        let reply: Bytes = bincode::serialize(&reply)?.into();
         writer.send(reply).await.map_err(|e| e.into())
     }
 }
@@ -35,6 +51,16 @@ async fn main() {
         .init()
         .unwrap();
 
+    // TODO may need some parametrization of path to support multiple instances
+    let store = Store::new(".db_single_node").unwrap();
+
     let address = "127.0.0.1:6100".parse::<SocketAddr>().unwrap();
-    Receiver::spawn(address, PingHandler).await.unwrap()
+    Receiver::spawn(
+        address,
+        PingHandler {
+            store: store.clone(),
+        },
+    )
+    .await
+    .unwrap()
 }
