@@ -13,10 +13,6 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-#[cfg(test)]
-#[path = "tests/simple_sender_tests.rs"]
-pub mod simple_sender_tests;
-
 /// We keep alive one TCP connection per peer, each connection is handled by a separate task (called `Connection`).
 /// We communicate with our 'connections' through a dedicated channel kept by the HashMap called `connections`.
 pub struct SimpleSender {
@@ -139,5 +135,71 @@ impl Connection {
                 },
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use bytes::Bytes;
+    use futures::future::try_join_all;
+    use std::net::SocketAddr;
+    use tokio::net::TcpListener;
+    use tokio::task::JoinHandle;
+    use tokio_util::codec::{Framed, LengthDelimitedCodec};
+
+    #[tokio::test]
+    async fn simple_send() {
+        // Run a TCP server.
+        let address = "127.0.0.1:6100".parse::<SocketAddr>().unwrap();
+        let message = "Hello, world!";
+        let handle = listener(address, message.to_string());
+
+        // Make the network sender and send the message.
+        let mut sender = SimpleSender::new();
+        sender.send(address, Bytes::from(message)).await;
+
+        // Ensure the server received the message (ie. it did not panic).
+        assert!(handle.await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn broadcast() {
+        // Run 3 TCP servers.
+        let message = "Hello, world!";
+        let (handles, addresses): (Vec<_>, Vec<_>) = (0..3)
+            .map(|x| {
+                let address = format!("127.0.0.1:{}", 6_200 + x)
+                    .parse::<SocketAddr>()
+                    .unwrap();
+                (listener(address, message.to_string()), address)
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .unzip();
+
+        // Make the network sender and send the message.
+        let mut sender = SimpleSender::new();
+        sender.broadcast(addresses, Bytes::from(message)).await;
+
+        // Ensure all servers received the broadcast.
+        assert!(try_join_all(handles).await.is_ok());
+    }
+
+    fn listener(address: SocketAddr, expected: String) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            let listener = TcpListener::bind(&address).await.expect("Address/port already in use");
+            let (socket, _) = listener.accept().await.unwrap();
+            let transport = Framed::new(socket, LengthDelimitedCodec::new());
+            let (mut writer, mut reader) = transport.split();
+            match reader.next().await {
+                Some(Ok(received)) => {
+                    assert_eq!(received, expected);
+                    writer.send(Bytes::from("Ack")).await.unwrap()
+                }
+                _ => panic!("Failed to receive network message"),
+            }
+        })
     }
 }
