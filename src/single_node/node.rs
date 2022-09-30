@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::sink::SinkExt as _;
-use log::info;
 use lib::network::{MessageHandler, Receiver, Writer};
+use log::info;
 use std::error::Error;
 
 use lib::network::ping::PingMessage;
