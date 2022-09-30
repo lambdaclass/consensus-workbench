@@ -4,6 +4,7 @@ use tokio::sync::oneshot;
 pub type StoreError = rocksdb::Error;
 type StoreResult<T> = Result<T, StoreError>;
 
+// FIXME why not just strings?
 type Key = Vec<u8>;
 type Value = Vec<u8>;
 

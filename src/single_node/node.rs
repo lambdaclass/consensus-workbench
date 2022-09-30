@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use bytes::Bytes;
+use clap::Parser;
 use futures::sink::SinkExt as _;
 use lib::{
     network::{MessageHandler, Receiver, Writer},
@@ -7,11 +8,22 @@ use lib::{
 };
 use log::info;
 use std::error::Error;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use lib::command::KeyValueCommand;
 
-use std::net::SocketAddr;
+#[derive(Parser)]
+#[clap(author, version, about)]
+struct Cli {
+    /// The network port of the node where to send txs.
+    #[clap(short, long, value_parser, value_name = "UINT", default_value_t = 6100)]
+    port: u16,
+    /// The network address of the node where to send txs.
+    #[clap(short, long, value_parser, value_name = "UINT", default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
+    address: IpAddr,
+}
 
+// FIXME rename
 #[derive(Clone)]
 struct PingHandler {
     pub store: Store,
@@ -28,7 +40,7 @@ impl MessageHandler for PingHandler {
                 self.store.write(key, value).await;
 
                 // FIXME add error handling
-                let result: Result<(), ()> = Ok(());
+                let result: Result<Option<Vec<u8>>, ()> = Ok(None);
                 bincode::serialize(&result)?.into()
             }
             KeyValueCommand::Get { key } => {
@@ -45,6 +57,10 @@ impl MessageHandler for PingHandler {
 
 #[tokio::main]
 async fn main() {
+    let cli = Cli::parse();
+
+    info!("Node socket: {}:{}", cli.address, cli.port);
+
     simple_logger::SimpleLogger::new()
         .env()
         .with_level(log::LevelFilter::Info)
@@ -53,8 +69,7 @@ async fn main() {
 
     // TODO may need some parametrization of path to support multiple instances
     let store = Store::new(".db_single_node").unwrap();
-
-    let address = "127.0.0.1:6100".parse::<SocketAddr>().unwrap();
+    let address = SocketAddr::new(cli.address, cli.port);
     Receiver::spawn(
         address,
         PingHandler {
