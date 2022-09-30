@@ -23,14 +23,13 @@ struct Cli {
     address: IpAddr,
 }
 
-// FIXME rename
 #[derive(Clone)]
-struct PingHandler {
+struct StoreHandler {
     pub store: Store,
 }
 
 #[async_trait]
-impl MessageHandler for PingHandler {
+impl MessageHandler for StoreHandler {
     async fn dispatch(&self, writer: &mut Writer, bytes: Bytes) -> Result<(), Box<dyn Error>> {
         let request = bincode::deserialize(&bytes)?;
         info!("Received request {:?}", request);
@@ -75,7 +74,7 @@ async fn main() {
     let address = SocketAddr::new(cli.address, cli.port);
     Receiver::spawn(
         address,
-        PingHandler {
+        StoreHandler {
             store: store.clone(),
         },
     )

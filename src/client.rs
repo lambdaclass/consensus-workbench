@@ -39,6 +39,7 @@ async fn main() -> Result<(), Error> {
     let mut sender = ReliableSender::new();
     let address = SocketAddr::new(cli.address, cli.port);
 
+    // if two args are passed, set to DB, otherwise get
     let command = if let Some(value) = cli.value {
         KeyValueCommand::Set {
             key: cli.key,
