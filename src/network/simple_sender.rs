@@ -189,7 +189,7 @@ mod tests {
 
     fn listener(address: SocketAddr, expected: String) -> JoinHandle<()> {
         tokio::spawn(async move {
-            let listener = TcpListener::bind(&address).await.unwrap();
+            let listener = TcpListener::bind(&address).await.expect("Address/port already in use");
             let (socket, _) = listener.accept().await.unwrap();
             let transport = Framed::new(socket, LengthDelimitedCodec::new());
             let (mut writer, mut reader) = transport.split();
