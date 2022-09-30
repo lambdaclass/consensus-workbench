@@ -2,10 +2,10 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::sink::SinkExt as _;
 use log::info;
-use network::{MessageHandler, Receiver, Writer};
+use lib::network::{MessageHandler, Receiver, Writer};
 use std::error::Error;
 
-use network::ping::PingMessage;
+use lib::network::ping::PingMessage;
 
 use std::net::SocketAddr;
 

@@ -2,8 +2,8 @@ use std::net::SocketAddr;
 
 use bytes::Bytes;
 use log::info;
-use network::ping::PingMessage;
-use network::ReliableSender;
+use lib::network::ping::PingMessage;
+use lib::network::ReliableSender;
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
