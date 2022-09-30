@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use bytes::Bytes;
-use lib::network::ping::PingMessage;
+use lib::command::PingMessage;
 use lib::network::ReliableSender;
 use log::info;
 

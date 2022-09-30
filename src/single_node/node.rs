@@ -5,7 +5,7 @@ use lib::network::{MessageHandler, Receiver, Writer};
 use log::info;
 use std::error::Error;
 
-use lib::network::ping::PingMessage;
+use lib::command::PingMessage;
 
 use std::net::SocketAddr;
 
