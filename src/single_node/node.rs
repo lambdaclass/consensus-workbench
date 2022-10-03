@@ -43,6 +43,7 @@ impl MessageHandler for StoreHandler {
             Command::Get { key } => self.store.read(key.clone().into()).await,
         };
 
+        // convert the error into something serializable
         let result = result.map_err(|e| e.to_string());
 
         info!("Sending response {:?}", result);
