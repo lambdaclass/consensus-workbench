@@ -1,5 +1,4 @@
-// Copyright(C) Facebook, Inc. and its affiliates.
-use crate::error::NetworkError;
+use super::error::NetworkError;
 use bytes::Bytes;
 use futures::sink::SinkExt as _;
 use futures::stream::StreamExt as _;
@@ -189,7 +188,9 @@ mod tests {
 
     fn listener(address: SocketAddr, expected: String) -> JoinHandle<()> {
         tokio::spawn(async move {
-            let listener = TcpListener::bind(&address).await.expect("Address/port already in use");
+            let listener = TcpListener::bind(&address)
+                .await
+                .expect("Address/port already in use");
             let (socket, _) = listener.accept().await.unwrap();
             let transport = Framed::new(socket, LengthDelimitedCodec::new());
             let (mut writer, mut reader) = transport.split();
