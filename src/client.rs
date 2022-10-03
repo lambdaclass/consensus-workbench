@@ -1,8 +1,6 @@
 use anyhow::Result;
-use bytes::Bytes;
 use clap::Parser;
-use lib::command::Command;
-use lib::network::ReliableSender;
+use lib::command;
 use log::{error, info};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -13,7 +11,7 @@ pub type Error = Box<dyn std::error::Error + Send + Sync>;
 struct Cli {
     /// The key/value store command to execute.
     #[clap(subcommand)]
-    command: Command,
+    command: command::Command,
 
     /// The network port of the node where to send txs.
     #[clap(long, short, value_parser, value_name = "INT", default_value_t = 6100)]
@@ -36,15 +34,8 @@ async fn main() -> Result<()> {
         .init()?;
 
     // using a reliable sender to get a response back
-    let mut sender = ReliableSender::new();
     let address = SocketAddr::new(cli.address, cli.port);
-
-    let message: Bytes = bincode::serialize(&cli.command)?.into();
-    let reply_handler = sender.send(address, message).await;
-
-    let response = reply_handler.await?;
-    let response: Result<Option<String>, String> = bincode::deserialize(&response)?;
-    match response {
+    match command::execute(cli.command, address).await {
         Ok(Some(value)) => info!("{}", value),
         Ok(None) => info!("null"),
         Err(error) => error!("ERROR {}", error),
