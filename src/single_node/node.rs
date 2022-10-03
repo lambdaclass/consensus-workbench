@@ -1,3 +1,5 @@
+/// This modules implements the most basic form of distributed system, a single node server that handles
+/// client requests to a key/value store. There is no replication and this no fault-tolerance.
 use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -24,12 +26,13 @@ struct Cli {
 }
 
 #[derive(Clone)]
-struct StoreHandler {
+/// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
+struct RequestHandler {
     pub store: Store,
 }
 
 #[async_trait]
-impl MessageHandler for StoreHandler {
+impl MessageHandler for RequestHandler {
     async fn dispatch(&self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
         let request = bincode::deserialize(&bytes)?;
         info!("Received request {:?}", request);
@@ -69,7 +72,7 @@ async fn main() {
     let address = SocketAddr::new(cli.address, cli.port);
     Receiver::spawn(
         address,
-        StoreHandler {
+        RequestHandler {
             store: store.clone(),
         },
     )
