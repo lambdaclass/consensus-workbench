@@ -1,3 +1,4 @@
+use anyhow::Result;
 use bytes::Bytes;
 use clap::Parser;
 use lib::command::Command;
@@ -24,7 +25,7 @@ struct Cli {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Error> {
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     info!("Node socket: {}{}", cli.address, cli.port);
@@ -32,8 +33,7 @@ async fn main() -> Result<(), Error> {
     simple_logger::SimpleLogger::new()
         .env()
         .with_level(log::LevelFilter::Info)
-        .init()
-        .unwrap();
+        .init()?;
 
     // using a reliable sender to get a response back
     let mut sender = ReliableSender::new();
@@ -50,20 +50,14 @@ async fn main() -> Result<(), Error> {
     };
 
     let message: Bytes = bincode::serialize(&command)?.into();
-    let cancel_handler = sender.send(address, message).await;
+    let reply_handler = sender.send(address, message).await;
 
-    match cancel_handler.await {
-        Ok(response) => {
-            let response: Result<Option<String>, String> =
-                bincode::deserialize(&response).expect("failed to deserialize response");
-
-            match response {
-                Ok(Some(value)) => info!("{}", value),
-                Ok(None) => info!("null"),
-                Err(error) => error!("ERROR {}", error),
-            }
-            Ok(())
-        }
-        Err(error) => Err(error.into()),
+    let response = reply_handler.await?;
+    let response: Result<Option<String>, String> = bincode::deserialize(&response)?;
+    match response {
+        Ok(Some(value)) => info!("{}", value),
+        Ok(None) => info!("null"),
+        Err(error) => error!("ERROR {}", error),
     }
+    Ok(())
 }

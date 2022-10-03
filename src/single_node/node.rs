@@ -1,3 +1,4 @@
+use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
 use clap::Parser;
@@ -7,7 +8,6 @@ use lib::{
     store::Store,
 };
 use log::info;
-use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use lib::command::Command;
@@ -30,7 +30,7 @@ struct StoreHandler {
 
 #[async_trait]
 impl MessageHandler for StoreHandler {
-    async fn dispatch(&self, writer: &mut Writer, bytes: Bytes) -> Result<(), Box<dyn Error>> {
+    async fn dispatch(&self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
         let request = bincode::deserialize(&bytes)?;
         info!("Received request {:?}", request);
 
@@ -41,7 +41,7 @@ impl MessageHandler for StoreHandler {
                     .await;
 
                 let result: Result<Option<String>, String> = Ok(Some(value));
-                bincode::serialize(&result)?.into()
+                bincode::serialize(&result)?
             }
             Command::Get { key } => {
                 let result = self
@@ -50,10 +50,10 @@ impl MessageHandler for StoreHandler {
                     .await
                     .map_err(|_| "error reading store");
 
-                bincode::serialize(&result)?.into()
+                bincode::serialize(&result)?
             }
         };
-        writer.send(reply).await.map_err(|e| e.into())
+        Ok(writer.send(reply.into()).await?)
     }
 }
 
