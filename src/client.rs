@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
 
     // using a reliable sender to get a response back
     let address = SocketAddr::new(cli.address, cli.port);
-    match command::execute(cli.command, address).await {
+    match cli.command.send_to(address).await {
         Ok(Some(value)) => info!("{}", value),
         Ok(None) => info!("null"),
         Err(error) => error!("ERROR {}", error),

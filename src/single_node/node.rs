@@ -77,7 +77,6 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lib::command;
     use std::fs;
     use tokio::time::{sleep, Duration};
 
@@ -97,57 +96,47 @@ mod tests {
         Receiver::spawn(address, SingleNodeServer { store });
         sleep(Duration::from_millis(10)).await;
 
-        let reply = command::execute(
-            Command::Get {
-                key: "k1".to_string(),
-            },
-            address,
-        )
+        let reply = Command::Get {
+            key: "k1".to_string(),
+        }
+        .send_to(address)
         .await
         .unwrap();
         assert!(reply.is_none());
 
-        let reply = command::execute(
-            Command::Set {
-                key: "k1".to_string(),
-                value: "v1".to_string(),
-            },
-            address,
-        )
+        let reply = Command::Set {
+            key: "k1".to_string(),
+            value: "v1".to_string(),
+        }
+        .send_to(address)
         .await
         .unwrap();
         assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
 
-        let reply = command::execute(
-            Command::Get {
-                key: "k1".to_string(),
-            },
-            address,
-        )
+        let reply = Command::Get {
+            key: "k1".to_string(),
+        }
+        .send_to(address)
         .await
         .unwrap();
         assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
 
-        let reply = command::execute(
-            Command::Set {
-                key: "k1".to_string(),
-                value: "v2".to_string(),
-            },
-            address,
-        )
+        let reply = Command::Set {
+            key: "k1".to_string(),
+            value: "v2".to_string(),
+        }
+        .send_to(address)
         .await
         .unwrap();
         assert!(reply.is_some());
         assert_eq!("v2".to_string(), reply.unwrap());
 
-        let reply = command::execute(
-            Command::Get {
-                key: "k1".to_string(),
-            },
-            address,
-        )
+        let reply = Command::Get {
+            key: "k1".to_string(),
+        }
+        .send_to(address)
         .await
         .unwrap();
         assert!(reply.is_some());
