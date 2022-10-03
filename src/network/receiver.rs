@@ -103,11 +103,7 @@ mod tests {
 
     #[async_trait]
     impl MessageHandler for TestHandler {
-        async fn dispatch(
-            &self,
-            writer: &mut Writer,
-            message: Bytes,
-        ) -> Result<(), Box<dyn Error>> {
+        async fn dispatch(&self, writer: &mut Writer, message: Bytes) -> Result<()> {
             // Reply with an ACK.
             let _ = writer.send(Bytes::from("Ack")).await;
 
