@@ -45,7 +45,6 @@ impl MessageHandler for StoreHandler {
 
         let result = result.map_err(|e| e.to_string());
 
-        // FIXME we expect strings from the cli but return Vec<u8>
         info!("Sending response {:?}", result);
         let reply = bincode::serialize(&result)?;
         Ok(writer.send(reply.into()).await?)
