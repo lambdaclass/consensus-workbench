@@ -12,7 +12,8 @@ pub enum StoreCommand {
     Read(Key),
 }
 
-/// FIXME explain what this is
+/// (sender, command) pair used to interact with the task that manages the store.
+/// The sender is used to reply with responses.
 type CommandMessage = (oneshot::Sender<Result<Option<Value>>>, StoreCommand);
 
 #[derive(Clone)]
