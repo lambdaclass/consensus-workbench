@@ -10,7 +10,7 @@ use log::info;
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use lib::command::KeyValueCommand;
+use lib::command::Command;
 
 #[derive(Parser)]
 #[clap(author, version, about)]
@@ -35,7 +35,7 @@ impl MessageHandler for StoreHandler {
         info!("Received request {:?}", request);
 
         let reply = match request {
-            KeyValueCommand::Set { key, value } => {
+            Command::Set { key, value } => {
                 self.store
                     .write(key.clone().into(), value.clone().into())
                     .await;
@@ -43,7 +43,7 @@ impl MessageHandler for StoreHandler {
                 let result: Result<Option<String>, String> = Ok(Some(value));
                 bincode::serialize(&result)?.into()
             }
-            KeyValueCommand::Get { key } => {
+            Command::Get { key } => {
                 let result = self
                     .store
                     .read(key.clone().into())

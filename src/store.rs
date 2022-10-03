@@ -75,7 +75,7 @@ mod tests {
         // Create new store.
         let path = ".db_test_read_write_value";
         let _ = fs::remove_dir_all(path);
-        let mut store = Store::new(path).unwrap();
+        let store = Store::new(path).unwrap();
 
         // Write value to the store.
         let key = vec![0u8, 1u8, 2u8, 3u8];
@@ -95,7 +95,7 @@ mod tests {
         // Create new store.
         let path = ".db_test_read_unknown_key";
         let _ = fs::remove_dir_all(path);
-        let mut store = Store::new(path).unwrap();
+        let store = Store::new(path).unwrap();
 
         // Try to read unknown key.
         let key = vec![0u8, 1u8, 2u8, 3u8];

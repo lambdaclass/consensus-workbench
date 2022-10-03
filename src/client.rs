@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use clap::Parser;
-use lib::command::KeyValueCommand;
+use lib::command::Command;
 use lib::network::ReliableSender;
 use log::{error, info};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -41,12 +41,12 @@ async fn main() -> Result<(), Error> {
 
     // if two args are passed, set to DB, otherwise get
     let command = if let Some(value) = cli.value {
-        KeyValueCommand::Set {
+        Command::Set {
             key: cli.key,
             value,
         }
     } else {
-        KeyValueCommand::Get { key: cli.key }
+        Command::Get { key: cli.key }
     };
 
     let message: Bytes = bincode::serialize(&command)?.into();
