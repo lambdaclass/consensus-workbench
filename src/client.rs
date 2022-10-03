@@ -39,7 +39,6 @@ async fn main() -> Result<()> {
     let mut sender = ReliableSender::new();
     let address = SocketAddr::new(cli.address, cli.port);
 
-    // if two args are passed, set to DB, otherwise get
     let message: Bytes = bincode::serialize(&cli.command)?.into();
     let reply_handler = sender.send(address, message).await;
 
