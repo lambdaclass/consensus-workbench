@@ -34,25 +34,20 @@ impl MessageHandler for StoreHandler {
         let request = bincode::deserialize(&bytes)?;
         info!("Received request {:?}", request);
 
-        let reply = match request {
+        let result = match request {
             Command::Set { key, value } => {
                 self.store
                     .write(key.clone().into(), value.clone().into())
-                    .await;
-
-                let result: Result<Option<String>, String> = Ok(Some(value));
-                bincode::serialize(&result)?
-            }
-            Command::Get { key } => {
-                let result = self
-                    .store
-                    .read(key.clone().into())
                     .await
-                    .map_err(|_| "error reading store");
-
-                bincode::serialize(&result)?
             }
+            Command::Get { key } => self.store.read(key.clone().into()).await,
         };
+
+        let result = result.map_err(|e| e.to_string());
+
+        // FIXME we expect strings from the cli but return Vec<u8>
+        info!("Sending response {:?}", result);
+        let reply = bincode::serialize(&result)?;
         Ok(writer.send(reply.into()).await?)
     }
 }

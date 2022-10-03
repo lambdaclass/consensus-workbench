@@ -1,58 +1,67 @@
-use tokio::sync::mpsc::{channel, Sender};
+use anyhow::{anyhow, Context, Result};
+use log::error;
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::oneshot;
-
-pub type StoreError = rocksdb::Error;
-type StoreResult<T> = Result<T, StoreError>;
 
 type Key = Vec<u8>;
 type Value = Vec<u8>;
 
+#[derive(Debug)]
 pub enum StoreCommand {
     Write(Key, Value),
-    Read(Key, oneshot::Sender<StoreResult<Option<Value>>>),
+    Read(Key),
 }
+
+/// FIXME explain what this is
+type CommandMessage = (oneshot::Sender<Result<Option<Value>>>, StoreCommand);
 
 #[derive(Clone)]
 pub struct Store {
-    channel: Sender<StoreCommand>,
+    channel: Sender<CommandMessage>,
 }
 
 impl Store {
-    pub fn new(path: &str) -> StoreResult<Self> {
+    pub fn new(path: &str) -> Result<Self> {
         let db = rocksdb::DB::open_default(path)?;
-        let (tx, mut rx) = channel(100);
+        let (tx, mut rx): (Sender<CommandMessage>, Receiver<CommandMessage>) = channel(100);
+
         tokio::spawn(async move {
-            while let Some(command) = rx.recv().await {
-                match command {
-                    StoreCommand::Write(key, value) => {
-                        db.put(&key, &value).unwrap();
-                    }
-                    StoreCommand::Read(key, sender) => {
-                        let response = db.get(&key);
-                        sender.send(response).unwrap();
-                    }
+            while let Some((sender, command)) = rx.recv().await {
+                let response = match command {
+                    StoreCommand::Write(key, value) => db.put(&key, &value).and(Ok(Some(value))),
+                    StoreCommand::Read(key) => db.get(&key),
+                };
+
+                // convert internal rocksdb error to anyhow before returning
+                let response = response.map_err(|e| anyhow!(e));
+
+                if let Err(error) = sender.send(response) {
+                    error!("store failed to send reply to send channel {:?}", error);
                 }
             }
         });
         Ok(Self { channel: tx })
     }
 
-    pub async fn write(&self, key: Key, value: Value) {
-        if let Err(e) = self.channel.send(StoreCommand::Write(key, value)).await {
-            // FIXME return error instead of panicking
-            panic!("Failed to send Write command to store: {}", e);
-        }
+    pub async fn write(&self, key: Key, value: Value) -> Result<Option<Value>> {
+        self.send(StoreCommand::Write(key, value)).await
     }
 
-    pub async fn read(&self, key: Key) -> StoreResult<Option<Value>> {
+    pub async fn read(&self, key: Key) -> Result<Option<Value>> {
+        self.send(StoreCommand::Read(key)).await
+    }
+
+    async fn send(&self, command: StoreCommand) -> Result<Option<Value>> {
         let (sender, receiver) = oneshot::channel();
-        if let Err(e) = self.channel.send(StoreCommand::Read(key, sender)).await {
-            // FIXME return error instead of panicking
-            panic!("Failed to send Read command to store: {}", e);
-        }
+
+        self.channel
+            .send((sender, command))
+            .await
+            .context("failed to send command to store")?;
+
         receiver
             .await
-            .expect("Failed to receive reply to Read command from store")
+            .context("failed to receive reply from store")?
     }
 }
 
@@ -80,7 +89,7 @@ mod tests {
         // Write value to the store.
         let key = vec![0u8, 1u8, 2u8, 3u8];
         let value = vec![4u8, 5u8, 6u8, 7u8];
-        store.write(key.clone(), value.clone()).await;
+        store.write(key.clone(), value.clone()).await.unwrap();
 
         // Read value.
         let result = store.read(key).await;
