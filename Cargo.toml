@@ -17,7 +17,6 @@ test = false
 [[bin]]
 name = "single_node"
 path = "src/single_node/node.rs"
-test = false
 
 [[bin]]
 name = "primary"

@@ -27,12 +27,12 @@ struct Cli {
 
 #[derive(Clone)]
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
-struct RequestHandler {
+struct SingleNodeServer {
     pub store: Store,
 }
 
 #[async_trait]
-impl MessageHandler for RequestHandler {
+impl MessageHandler for SingleNodeServer {
     async fn dispatch(&self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
         let request = bincode::deserialize(&bytes)?;
         info!("Received request {:?}", request);
@@ -67,15 +67,90 @@ async fn main() {
         .init()
         .unwrap();
 
-    // TODO may need some parametrization of path to support multiple instances
-    let store = Store::new(".db_single_node").unwrap();
     let address = SocketAddr::new(cli.address, cli.port);
-    Receiver::spawn(
-        address,
-        RequestHandler {
-            store: store.clone(),
-        },
-    )
-    .await
-    .unwrap()
+    let store = Store::new(".db_single_node").unwrap();
+    Receiver::spawn(address, SingleNodeServer { store })
+        .await
+        .unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lib::command;
+    use std::fs;
+    use tokio::time::{sleep, Duration};
+
+    #[tokio::test]
+    async fn test_server() {
+        let db_path = ".db_test";
+        fs::remove_dir_all(db_path).unwrap_or_default();
+        let store = Store::new(db_path).unwrap();
+
+        simple_logger::SimpleLogger::new()
+            .env()
+            .with_level(log::LevelFilter::Info)
+            .init()
+            .unwrap();
+
+        let address: SocketAddr = "127.0.0.1:6182".parse().unwrap();
+        Receiver::spawn(address, SingleNodeServer { store });
+        sleep(Duration::from_millis(10)).await;
+
+        let reply = command::execute(
+            Command::Get {
+                key: "k1".to_string(),
+            },
+            address,
+        )
+        .await
+        .unwrap();
+        assert!(reply.is_none());
+
+        let reply = command::execute(
+            Command::Set {
+                key: "k1".to_string(),
+                value: "v1".to_string(),
+            },
+            address,
+        )
+        .await
+        .unwrap();
+        assert!(reply.is_some());
+        assert_eq!("v1".to_string(), reply.unwrap());
+
+        let reply = command::execute(
+            Command::Get {
+                key: "k1".to_string(),
+            },
+            address,
+        )
+        .await
+        .unwrap();
+        assert!(reply.is_some());
+        assert_eq!("v1".to_string(), reply.unwrap());
+
+        let reply = command::execute(
+            Command::Set {
+                key: "k1".to_string(),
+                value: "v2".to_string(),
+            },
+            address,
+        )
+        .await
+        .unwrap();
+        assert!(reply.is_some());
+        assert_eq!("v2".to_string(), reply.unwrap());
+
+        let reply = command::execute(
+            Command::Get {
+                key: "k1".to_string(),
+            },
+            address,
+        )
+        .await
+        .unwrap();
+        assert!(reply.is_some());
+        assert_eq!("v2".to_string(), reply.unwrap());
+    }
 }
