@@ -11,17 +11,17 @@ pub type Error = Box<dyn std::error::Error + Send + Sync>;
 #[derive(Parser)]
 #[clap(author, version, about)]
 struct Cli {
+    /// The key/value store command to execute.
+    #[clap(subcommand)]
+    command: Command,
+
     /// The network port of the node where to send txs.
     #[clap(long, short, value_parser, value_name = "INT", default_value_t = 6100)]
     port: u16,
+
     /// The network address of the node where to send txs.
     #[clap(short, long, value_parser, value_name = "INT", default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
     address: IpAddr,
-    /// The key to get or set in the DB
-    key: String,
-    /// The value to set to the key in the DB. If omitted, the key is retrieved from the DB.
-    // TODO consider explicitly passing get/set commands
-    value: Option<String>,
 }
 
 #[tokio::main]
@@ -40,16 +40,7 @@ async fn main() -> Result<()> {
     let address = SocketAddr::new(cli.address, cli.port);
 
     // if two args are passed, set to DB, otherwise get
-    let command = if let Some(value) = cli.value {
-        Command::Set {
-            key: cli.key,
-            value,
-        }
-    } else {
-        Command::Get { key: cli.key }
-    };
-
-    let message: Bytes = bincode::serialize(&command)?.into();
+    let message: Bytes = bincode::serialize(&cli.command)?.into();
     let reply_handler = sender.send(address, message).await;
 
     let response = reply_handler.await?;
