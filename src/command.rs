@@ -1,6 +1,8 @@
 use crate::network::ReliableSender;
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
+use std::fmt;
+
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -8,6 +10,9 @@ use std::net::SocketAddr;
 #[derive(Debug, Serialize, Deserialize, Parser)]
 #[clap()]
 pub enum Command {
+    // node-generated commands (TODO: this could be part of a different enum)
+    SyncSet { key: String, value: String },
+    // user-generated commands
     Set { key: String, value: String },
     Get { key: String },
 }
@@ -23,5 +28,11 @@ impl Command {
         let response = reply_handler.await?;
         let response: Result<Option<String>, String> = bincode::deserialize(&response)?;
         response.map_err(|e| anyhow!(e))
+    }
+}
+
+impl fmt::Display for Command {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
     }
 }

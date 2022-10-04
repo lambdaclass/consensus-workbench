@@ -14,6 +14,7 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 /// We keep alive one TCP connection per peer, each connection is handled by a separate task (called `Connection`).
 /// We communicate with our 'connections' through a dedicated channel kept by the HashMap called `connections`.
+#[derive(Clone)]
 pub struct SimpleSender {
     /// A map holding the channels to our connections.
     connections: HashMap<SocketAddr, Sender<Bytes>>,
