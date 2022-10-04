@@ -1,3 +1,5 @@
+/// This modules contains a basic implementation for a replica node message handler
+/// Set commands will return error because they are supposed to be handled by primary
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
