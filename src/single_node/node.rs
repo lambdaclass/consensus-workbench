@@ -1,6 +1,6 @@
 /// This modules implements the most basic form of distributed system, a single node server that handles
 /// client requests to a key/value store. There is no replication and this no fault-tolerance.
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use clap::Parser;
@@ -33,7 +33,7 @@ struct SingleNodeServer {
 
 #[async_trait]
 impl MessageHandler for SingleNodeServer {
-    async fn dispatch(&self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
+    async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
         let request = bincode::deserialize(&bytes)?;
         info!("Received request {:?}", request);
 
@@ -44,6 +44,7 @@ impl MessageHandler for SingleNodeServer {
                     .await
             }
             Command::Get { key } => self.store.read(key.clone().into()).await,
+            _ => Err(anyhow!("Unhandled command")),
         };
 
         // convert the error into something serializable
