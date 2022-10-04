@@ -1,10 +1,10 @@
+use clap::Parser;
 use lib::{
-    network::{ Receiver, SimpleSender},
+    network::{Receiver, SimpleSender},
     store::Store,
 };
 use log::info;
-use std::net::{SocketAddr, IpAddr, Ipv4Addr};
-use clap::Parser;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 mod primary;
 mod replica;
@@ -47,20 +47,25 @@ async fn main() {
             info!("Primary: Running as primary on {}.", address);
 
             // if not a replica, see if there is a parameter of a socket to replicate to
-            let server = primary::SingleNodeServer { store, replica_socket: cli.replicate_to,  sender: SimpleSender::new() };
-            cli.replicate_to.is_some().then(|| info!("Primary: Replicating to {}.", cli.replicate_to.unwrap()));
-            
-            Receiver::spawn(address, server)
-                    .await
-                    .unwrap();
-        },
-        true => { 
+            let server = primary::SingleNodeServer {
+                store,
+                replica_socket: cli.replicate_to,
+                sender: SimpleSender::new(),
+            };
+            cli.replicate_to
+                .is_some()
+                .then(|| info!("Primary: Replicating to {}.", cli.replicate_to.unwrap()));
+
+            Receiver::spawn(address, server).await.unwrap();
+        }
+        true => {
             let store = Store::new(".db_replica").unwrap();
             let node = replica::ReplicaNodeServer { store };
-            info!("Replica: Running as replica on {}, waiting for commands from the primary node...", address);
-            Receiver::spawn(address, node)
-                    .await
-                    .unwrap();
+            info!(
+                "Replica: Running as replica on {}, waiting for commands from the primary node...",
+                address
+            );
+            Receiver::spawn(address, node).await.unwrap();
         }
     }
 }
@@ -68,8 +73,8 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use lib::command::Command;
+    use std::fs;
     use tokio::time::{sleep, Duration};
 
     // since logger is meant to be initialized once and tests run in parallel,
@@ -97,7 +102,14 @@ mod tests {
 
         let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
         let simple_sender = SimpleSender::new();
-        Receiver::spawn(address, primary::SingleNodeServer { store, replica_socket: None, sender: simple_sender});
+        Receiver::spawn(
+            address,
+            primary::SingleNodeServer {
+                store,
+                replica_socket: None,
+                sender: simple_sender,
+            },
+        );
         sleep(Duration::from_millis(10)).await;
 
         let reply = Command::Get {
@@ -126,7 +138,6 @@ mod tests {
         .unwrap();
         assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
-
     }
 
     #[tokio::test]
@@ -134,8 +145,20 @@ mod tests {
         let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
         let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
         let simple_sender = SimpleSender::new();
-        Receiver::spawn(address_replica, replica::ReplicaNodeServer { store: create_store("replica")   });
-        Receiver::spawn(address_primary, primary::SingleNodeServer { store: create_store("primary"), replica_socket: Some(address_replica), sender: simple_sender});
+        Receiver::spawn(
+            address_replica,
+            replica::ReplicaNodeServer {
+                store: create_store("replica"),
+            },
+        );
+        Receiver::spawn(
+            address_primary,
+            primary::SingleNodeServer {
+                store: create_store("primary"),
+                replica_socket: Some(address_replica),
+                sender: simple_sender,
+            },
+        );
         sleep(Duration::from_millis(10)).await;
 
         // get null value
@@ -181,7 +204,7 @@ mod tests {
         // should fail since replica should not respond to set commands
         let reply = Command::Set {
             key: "k3".to_string(),
-            value: "_".to_string()
+            value: "_".to_string(),
         }
         .send_to(address_replica)
         .await;

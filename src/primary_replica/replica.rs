@@ -25,16 +25,14 @@ impl MessageHandler for ReplicaNodeServer {
         info!("Received request {:?}", request);
 
         let result = match request {
-            Command::Set{..} => {
-                Err(anyhow!("User cannot issue set commands to replicas"))
-            },
+            Command::Set { .. } => Err(anyhow!("User cannot issue set commands to replicas")),
             Command::SyncSet { key, value } => {
                 self.store
                     .write(key.clone().into(), value.clone().into())
                     .await
             }
             Command::Get { key } => self.store.read(key.clone().into()).await,
-            _ => { Err(anyhow!("Unhandled command")) },
+            _ => Err(anyhow!("Unhandled command")),
         };
 
         // convert the error into something serializable
