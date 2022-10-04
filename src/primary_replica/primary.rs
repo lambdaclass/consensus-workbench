@@ -1,5 +1,5 @@
-/// This modules implements the most basic form of distributed system, a single node server that handles
-/// client requests to a key/value store. There is no replication and this no fault-tolerance.
+/// This modules contains a basic implementation os a primary node message handler
+/// Every Set command to a primary node will be relayed on the `replica_socket` node
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
