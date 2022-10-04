@@ -6,8 +6,9 @@ Proof of concept Rust implementations for various distributed systems patterns.
     # run a single echo server
     cargo run --bin single_node
 
-    # on a separate shell, send a command to the server
-    cargo run --bin client
+    # on a separate shell, send key/value commands to the server
+    cargo run --bin client -- set v1 hello
+    cargo run --bin client -- get v1
 
 ## Implementations
 
