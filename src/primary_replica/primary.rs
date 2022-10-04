@@ -13,8 +13,6 @@ use std::net::{SocketAddr};
 
 use lib::command::Command;
 
-
-
 #[derive(Clone)]
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
 pub struct SingleNodeServer {
