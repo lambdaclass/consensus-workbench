@@ -32,6 +32,26 @@ pub enum State {
 
 use State::*;
 
+impl Node {
+    pub fn primary(peers: Vec<SocketAddr>) -> Self {
+        Self {
+            state: Primary,
+            store: Store::new(".db_primary").unwrap(),
+            peers,
+            sender: ReliableSender::new(),
+        }
+    }
+
+    pub fn backup() -> Self {
+        Self {
+            state: Backup,
+            store: Store::new(".db_replica").unwrap(),
+            peers: vec![],
+            sender: ReliableSender::new(),
+        }
+    }
+}
+
 #[async_trait]
 impl MessageHandler for Node {
     async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {

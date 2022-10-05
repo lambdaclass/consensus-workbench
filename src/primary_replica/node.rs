@@ -1,12 +1,9 @@
 use clap::Parser;
-use lib::{
-    network::{Receiver, ReliableSender},
-    store::Store,
-};
+use lib::network::Receiver;
 use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use crate::primary::State;
+use crate::primary::Node;
 
 mod primary;
 
@@ -41,43 +38,26 @@ async fn main() {
 
     let address = SocketAddr::new(cli.address, cli.port);
 
-    // check if node should start as replica
-    match cli.replica {
+    let node = match cli.replica {
         false => {
-            // TODO add constructor methods for this
-            let store = Store::new(".db_primary").unwrap();
             info!("Primary: Running as primary on {}.", address);
 
-            // if not a replica, see if there is a parameter of a socket to replicate to
-            let server = primary::Node {
-                state: State::Primary,
-                store,
-                // TODO will eventually handle multiple peers, but for now we keep passing the single replica
-                peers: vec![cli.replicate_to.unwrap()],
-                sender: ReliableSender::new(),
-            };
+            // TODO we will eventually handle multiple peers, but for now we keep passing the single replica
             cli.replicate_to
                 .is_some()
                 .then(|| info!("Primary: Replicating to {}.", cli.replicate_to.unwrap()));
 
-            Receiver::spawn(address, server).await.unwrap();
+            Node::primary(vec![cli.replicate_to.unwrap()])
         }
         true => {
-            // TODO add constructor methods for this
-            let store = Store::new(".db_replica").unwrap();
-            let node = primary::Node {
-                state: State::Backup,
-                store,
-                peers: vec![],
-                sender: ReliableSender::new(),
-            };
             info!(
                 "Replica: Running as replica on {}, waiting for commands from the primary node...",
                 address
             );
-            Receiver::spawn(address, node).await.unwrap();
+            Node::backup()
         }
-    }
+    };
+    Receiver::spawn(address, node).await.unwrap();
 }
 
 #[cfg(test)]
