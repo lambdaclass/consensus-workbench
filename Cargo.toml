@@ -16,11 +16,11 @@ test = false
 
 [[bin]]
 name = "single_node"
-path = "src/single_node/node.rs"
+path = "src/single_node/main.rs"
 
 [[bin]]
 name = "node_replication"
-path = "src/primary_replica/node.rs"
+path = "src/primary_replica/main.rs"
 
 
 [dependencies]
