@@ -1,6 +1,6 @@
-/// This module contains a basic implementation of a primary node message handler
-/// Every Set command to a primary node will be relayed on the `replica_socket` node
-/// TODO update this doc
+/// This module contains an implementation nodes that can run in primary or backup mode.
+/// Every Set command to a primary node will be broadcasted reliably for the backup nodes to replicate it.
+/// We plan to add backup promotion in case of primary failure.
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
