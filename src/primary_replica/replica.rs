@@ -32,7 +32,6 @@ impl MessageHandler for ReplicaNodeServer {
                     .await
             }
             Command::Get { key } => self.store.read(key.clone().into()).await,
-            _ => Err(anyhow!("Unhandled command")),
         };
 
         // convert the error into something serializable

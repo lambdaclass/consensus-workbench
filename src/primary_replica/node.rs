@@ -49,7 +49,8 @@ async fn main() {
             // if not a replica, see if there is a parameter of a socket to replicate to
             let server = primary::SingleNodeServer {
                 store,
-                replica_socket: cli.replicate_to,
+                // TODO will eventually handle multiple peers, but for now we keep passing the single replica
+                peers: vec![cli.replicate_to.unwrap()],
                 sender: SimpleSender::new(),
             };
             cli.replicate_to
@@ -106,7 +107,7 @@ mod tests {
             address,
             primary::SingleNodeServer {
                 store,
-                replica_socket: None,
+                peers: None,
                 sender: simple_sender,
             },
         );
@@ -155,7 +156,7 @@ mod tests {
             address_primary,
             primary::SingleNodeServer {
                 store: create_store("primary"),
-                replica_socket: Some(address_replica),
+                peers: Some(address_replica),
                 sender: simple_sender,
             },
         );

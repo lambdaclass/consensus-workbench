@@ -17,8 +17,13 @@ use lib::command::Command;
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
 pub struct SingleNodeServer {
     pub store: Store,
-    pub replica_socket: Option<SocketAddr>,
+    pub peers: Vec<SocketAddr>,
     pub sender: SimpleSender,
+}
+
+pub enum NodeState {
+    Primary,
+    Backup,
 }
 
 #[async_trait]
@@ -31,7 +36,10 @@ impl MessageHandler for SingleNodeServer {
             Command::Set { key, value } => {
                 // synced set
 
-                if self.replica_socket.is_some() {
+                // TODO review if there's a better network primitive for sending to all peers
+                for peer in self.peers.iter() {
+                    // TODO review: since we're always using the same serialization format,
+                    // would it make sense to always handle serialization inside the networking calls?
                     let sync_message: Bytes = bincode::serialize(&Command::SyncSet {
                         key: key.clone(),
                         value: value.clone(),
@@ -39,9 +47,7 @@ impl MessageHandler for SingleNodeServer {
                     .unwrap()
                     .into();
 
-                    self.sender
-                        .send(self.replica_socket.unwrap().clone(), sync_message)
-                        .await;
+                    self.sender.send(*peer, sync_message).await;
                 }
 
                 self.store.write(key.into(), value.into()).await
