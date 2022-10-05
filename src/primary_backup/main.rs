@@ -10,9 +10,6 @@ mod node;
 #[derive(Parser)]
 #[clap(author, version, about)]
 struct Cli {
-    /// Run as replica
-    #[arg(long, value_parser)]
-    replica: bool,
     /// The network port of the node where to send txs.
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = 6100)]
     port: u16,
@@ -38,24 +35,17 @@ async fn main() {
 
     let address = SocketAddr::new(cli.address, cli.port);
 
-    let node = match cli.replica {
-        false => {
-            info!("Primary: Running as primary on {}.", address);
-
-            // TODO we will eventually handle multiple peers, but for now we keep passing the single replica
-            cli.replicate_to
-                .is_some()
-                .then(|| info!("Primary: Replicating to {}.", cli.replicate_to.unwrap()));
-
-            Node::primary(vec![cli.replicate_to.unwrap()], ".db_primary")
-        }
-        true => {
-            info!(
-                "Replica: Running as replica on {}, waiting for commands from the primary node...",
-                address
-            );
-            Node::backup(".db_replica")
-        }
+    // TODO we will eventually handle multiple peers that register to the primary,
+    // but for now we keep passing the single replica
+    let node = if let Some(primary_address) = cli.replicate_to {
+        info!("Primary: Running as primary on {}.", address);
+        Node::primary(vec![primary_address], ".db_primary")
+    } else {
+        info!(
+            "Replica: Running as replica on {}, waiting for commands from the primary node...",
+            address
+        );
+        Node::backup(".db_replica")
     };
     Receiver::spawn(address, node).await.unwrap();
 }

@@ -13,19 +13,14 @@ It compiles to `/target/[cfg]/node_replication`.
 ## Example usage
 In the bin output folder, you can run the binaries as follows:
 
-Running a single primary node on port 6100
-```
-./node_replication --port 6100
-```
-
 Running a replica and a primary node that replicates to it (different ports)
 ```
-./node_replication --replica --port 6100 & ./node_replication --port 6101 --replicate-to 127.0.0.1:6100
+./node_replication --port 6100 & ./node_replication --port 6101 --replicate-to 127.0.0.1:6100
 ```
 
 Or you can run them on separate shell stdouts:
 ```
-./node_replication --replica --port 6100
+./node_replication --port 6100
 ./node_replication --port 6101 --replicate-to 127.0.0.1:6100
 ```
 
