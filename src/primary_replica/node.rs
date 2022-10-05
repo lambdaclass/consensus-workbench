@@ -102,13 +102,13 @@ mod tests {
         let store = create_store("primary1");
 
         let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
-        let simple_sender = SimpleSender::new();
+        let sender = ReliableSender::new();
         Receiver::spawn(
             address,
             primary::SingleNodeServer {
                 store,
-                peers: None,
-                sender: simple_sender,
+                peers: Vec::new(),
+                sender,
             },
         );
         sleep(Duration::from_millis(10)).await;
@@ -145,7 +145,7 @@ mod tests {
     async fn test_replicated_server() {
         let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
         let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
-        let simple_sender = SimpleSender::new();
+        let sender = ReliableSender::new();
         Receiver::spawn(
             address_replica,
             replica::ReplicaNodeServer {
@@ -156,8 +156,8 @@ mod tests {
             address_primary,
             primary::SingleNodeServer {
                 store: create_store("primary"),
-                peers: Some(address_replica),
-                sender: simple_sender,
+                peers: vec![address_replica],
+                sender,
             },
         );
         sleep(Duration::from_millis(10)).await;
