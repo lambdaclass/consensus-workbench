@@ -66,15 +66,20 @@ mod tests {
             .with_level(log::LevelFilter::Info)
             .init()
             .unwrap();
+
+        fs::remove_dir_all(db_path("")).unwrap_or_default();
+    }
+
+    fn db_path(suffix: &str) -> String {
+        format!(".db_test/{}", suffix)
     }
 
     #[tokio::test]
     async fn test_only_primary_server() {
-        fs::remove_dir_all(".db_test_primary1").unwrap_or_default();
         let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
         Receiver::spawn(
             address,
-            node::Node::primary(Vec::new(), ".db_test_primary1"),
+            node::Node::primary(Vec::new(), &db_path("primary1")),
         );
         sleep(Duration::from_millis(10)).await;
 
@@ -108,15 +113,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_replicated_server() {
-        fs::remove_dir_all(".db_test_primary2").unwrap_or_default();
-        fs::remove_dir_all(".db_test_backup2").unwrap_or_default();
-
         let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
         let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
-        Receiver::spawn(address_replica, node::Node::backup(".db_test_backup2"));
+        Receiver::spawn(address_replica, node::Node::backup(&db_path("backup2")));
         Receiver::spawn(
             address_primary,
-            node::Node::primary(vec![address_replica], ".db_test_primary2"),
+            node::Node::primary(vec![address_replica], &db_path("primary2")),
         );
         sleep(Duration::from_millis(10)).await;
 
