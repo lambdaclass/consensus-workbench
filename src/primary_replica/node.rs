@@ -19,9 +19,12 @@ struct Cli {
     /// The network address of the node where to send txs.
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
     address: IpAddr,
-    /// Where to replicate to, if not running as a replica.
+    /// if running as a replica, this is the address of the primary
     #[clap(short, long, value_parser, value_name = "ADDR")]
-    replicate_to: Option<SocketAddr>,
+    primary: Option<SocketAddr>,
+    /// Store name, useful to have several nodes in same machine.
+    #[clap(short, long)]
+    db_name: Option<String>,
 }
 
 #[tokio::main]
@@ -43,21 +46,27 @@ async fn main() {
             info!("Primary: Running as primary on {}.", address);
 
             // TODO we will eventually handle multiple peers, but for now we keep passing the single replica
-            cli.replicate_to
+            cli.primary
                 .is_some()
-                .then(|| info!("Primary: Replicating to {}.", cli.replicate_to.unwrap()));
-
-            Node::primary(vec![cli.replicate_to.unwrap()], ".db_primary")
+                .then(|| info!("Primary: Replicating to {}.", cli.primary.unwrap()));
+            
+            let db_name = db_name(cli.db_name.unwrap_or("primary".to_string()));
+            Node::primary(vec![cli.primary.unwrap()], &db_name)
         }
         true => {
             info!(
                 "Replica: Running as replica on {}, waiting for commands from the primary node...",
                 address
             );
-            Node::backup(".db_replica")
+            let db_name = db_name(cli.db_name.unwrap_or("replica".to_string()));
+            Node::backup(&db_name)
         }
     };
     Receiver::spawn(address, node).await.unwrap();
+}
+
+fn db_name(name: String) -> String {
+    format!(".db_{}", name)
 }
 
 #[cfg(test)]
