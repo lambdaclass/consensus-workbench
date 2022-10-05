@@ -72,7 +72,7 @@ impl MessageHandler for Node {
                 // forward the command to all replicas and wait for them to respond
                 let handlers = self
                     .sender
-                    .broadcast(self.peers.to_vec(), sync_message)
+                    .broadcast(self.peers.clone(), sync_message)
                     .await;
                 futures::future::join_all(handlers).await;
 
