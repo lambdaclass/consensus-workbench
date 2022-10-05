@@ -47,14 +47,14 @@ async fn main() {
                 .is_some()
                 .then(|| info!("Primary: Replicating to {}.", cli.replicate_to.unwrap()));
 
-            Node::primary(vec![cli.replicate_to.unwrap()])
+            Node::primary(vec![cli.replicate_to.unwrap()], ".db_primary")
         }
         true => {
             info!(
                 "Replica: Running as replica on {}, waiting for commands from the primary node...",
                 address
             );
-            Node::backup()
+            Node::backup(".db_replica")
         }
     };
     Receiver::spawn(address, node).await.unwrap();
@@ -78,28 +78,13 @@ mod tests {
             .unwrap();
     }
 
-    fn create_store(name_suffix: &str) -> Store {
-        let db_path = format!(".db_test_{}", name_suffix);
-        let db_path = db_path.as_ref();
-
-        fs::remove_dir_all(db_path).unwrap_or_default();
-        Store::new(db_path).unwrap()
-    }
-
     #[tokio::test]
     async fn test_only_primary_server() {
-        let store = create_store("primary1");
-
+        fs::remove_dir_all(".db_test_primary1").unwrap_or_default();
         let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
-        let sender = ReliableSender::new();
         Receiver::spawn(
             address,
-            primary::Node {
-                state: primary::State::Primary,
-                store,
-                peers: Vec::new(),
-                sender,
-            },
+            primary::Node::primary(Vec::new(), ".db_test_primary1"),
         );
         sleep(Duration::from_millis(10)).await;
 
@@ -133,25 +118,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_replicated_server() {
+        fs::remove_dir_all(".db_test_primary2").unwrap_or_default();
+        fs::remove_dir_all(".db_test_backup2").unwrap_or_default();
+
         let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
         let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
-        Receiver::spawn(
-            address_replica,
-            primary::Node {
-                store: create_store("replica"),
-                state: State::Backup,
-                peers: vec![],
-                sender: ReliableSender::new(),
-            },
-        );
+        Receiver::spawn(address_replica, primary::Node::backup(".db_test_backup2"));
         Receiver::spawn(
             address_primary,
-            primary::Node {
-                state: primary::State::Primary,
-                store: create_store("primary"),
-                peers: vec![address_replica],
-                sender: ReliableSender::new(),
-            },
+            primary::Node::primary(vec![address_replica], ".db_test_primary2"),
         );
         sleep(Duration::from_millis(10)).await;
 

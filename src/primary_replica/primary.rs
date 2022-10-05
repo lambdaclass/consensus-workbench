@@ -33,19 +33,19 @@ pub enum State {
 use State::*;
 
 impl Node {
-    pub fn primary(peers: Vec<SocketAddr>) -> Self {
+    pub fn primary(peers: Vec<SocketAddr>, db_path: &str) -> Self {
         Self {
             state: Primary,
-            store: Store::new(".db_primary").unwrap(),
+            store: Store::new(db_path).unwrap(),
             peers,
             sender: ReliableSender::new(),
         }
     }
 
-    pub fn backup() -> Self {
+    pub fn backup(db_path: &str) -> Self {
         Self {
             state: Backup,
-            store: Store::new(".db_replica").unwrap(),
+            store: Store::new(db_path).unwrap(),
             peers: vec![],
             sender: ReliableSender::new(),
         }
