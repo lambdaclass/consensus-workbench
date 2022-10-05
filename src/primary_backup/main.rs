@@ -1,20 +1,15 @@
 use clap::Parser;
-use lib::{
-    network::{Receiver, SimpleSender},
-    store::Store,
-};
+use lib::network::Receiver;
 use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-mod primary;
-mod replica;
+use crate::node::Node;
+
+mod node;
 
 #[derive(Parser)]
 #[clap(author, version, about)]
 struct Cli {
-    /// Run as replica
-    #[arg(long, value_parser)]
-    replica: bool,
     /// The network port of the node where to send txs.
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = 6100)]
     port: u16,
@@ -40,34 +35,19 @@ async fn main() {
 
     let address = SocketAddr::new(cli.address, cli.port);
 
-    // check if node should start as replica
-    match cli.replica {
-        false => {
-            let store = Store::new(".db_primary").unwrap();
-            info!("Primary: Running as primary on {}.", address);
-
-            // if not a replica, see if there is a parameter of a socket to replicate to
-            let server = primary::SingleNodeServer {
-                store,
-                replica_socket: cli.replicate_to,
-                sender: SimpleSender::new(),
-            };
-            cli.replicate_to
-                .is_some()
-                .then(|| info!("Primary: Replicating to {}.", cli.replicate_to.unwrap()));
-
-            Receiver::spawn(address, server).await.unwrap();
-        }
-        true => {
-            let store = Store::new(".db_replica").unwrap();
-            let node = replica::ReplicaNodeServer { store };
-            info!(
-                "Replica: Running as replica on {}, waiting for commands from the primary node...",
-                address
-            );
-            Receiver::spawn(address, node).await.unwrap();
-        }
-    }
+    // TODO we will eventually handle multiple peers that register to the primary,
+    // but for now we keep passing the single replica
+    let node = if let Some(primary_address) = cli.replicate_to {
+        info!("Primary: Running as primary on {}.", address);
+        Node::primary(vec![primary_address], ".db_primary")
+    } else {
+        info!(
+            "Replica: Running as replica on {}, waiting for commands from the primary node...",
+            address
+        );
+        Node::backup(".db_replica")
+    };
+    Receiver::spawn(address, node).await.unwrap();
 }
 
 #[cfg(test)]
@@ -86,29 +66,20 @@ mod tests {
             .with_level(log::LevelFilter::Info)
             .init()
             .unwrap();
+
+        fs::remove_dir_all(db_path("")).unwrap_or_default();
     }
 
-    fn create_store(name_suffix: &str) -> Store {
-        let db_path = format!(".db_test_{}", name_suffix);
-        let db_path = db_path.as_ref();
-
-        fs::remove_dir_all(db_path).unwrap_or_default();
-        Store::new(db_path).unwrap()
+    fn db_path(suffix: &str) -> String {
+        format!(".db_test/{}", suffix)
     }
 
     #[tokio::test]
     async fn test_only_primary_server() {
-        let store = create_store("primary1");
-
         let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
-        let simple_sender = SimpleSender::new();
         Receiver::spawn(
             address,
-            primary::SingleNodeServer {
-                store,
-                replica_socket: None,
-                sender: simple_sender,
-            },
+            node::Node::primary(Vec::new(), &db_path("primary1")),
         );
         sleep(Duration::from_millis(10)).await;
 
@@ -144,20 +115,10 @@ mod tests {
     async fn test_replicated_server() {
         let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
         let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
-        let simple_sender = SimpleSender::new();
-        Receiver::spawn(
-            address_replica,
-            replica::ReplicaNodeServer {
-                store: create_store("replica"),
-            },
-        );
+        Receiver::spawn(address_replica, node::Node::backup(&db_path("backup2")));
         Receiver::spawn(
             address_primary,
-            primary::SingleNodeServer {
-                store: create_store("primary"),
-                replica_socket: Some(address_replica),
-                sender: simple_sender,
-            },
+            node::Node::primary(vec![address_replica], &db_path("primary2")),
         );
         sleep(Duration::from_millis(10)).await;
 
