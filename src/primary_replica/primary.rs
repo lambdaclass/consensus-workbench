@@ -15,19 +15,22 @@ use lib::command::Command;
 
 #[derive(Clone)]
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
-pub struct SingleNodeServer {
+pub struct Node {
+    pub state: State,
     pub store: Store,
     pub peers: Vec<SocketAddr>,
     pub sender: ReliableSender,
 }
 
-pub enum NodeState {
+/// The state of a node viewed as a state-machine.
+#[derive(Clone)]
+pub enum State {
     Primary,
     Backup,
 }
 
 #[async_trait]
-impl MessageHandler for SingleNodeServer {
+impl MessageHandler for Node {
     async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
         let request = bincode::deserialize(&bytes)?;
         info!("Received request {:?}", request);

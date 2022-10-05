@@ -6,6 +6,8 @@ use lib::{
 use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use crate::primary::State;
+
 mod primary;
 mod replica;
 
@@ -47,7 +49,9 @@ async fn main() {
             info!("Primary: Running as primary on {}.", address);
 
             // if not a replica, see if there is a parameter of a socket to replicate to
-            let server = primary::SingleNodeServer {
+            // TODO add a constructor for this
+            let server = primary::Node {
+                state: State::Primary,
                 store,
                 // TODO will eventually handle multiple peers, but for now we keep passing the single replica
                 peers: vec![cli.replicate_to.unwrap()],
@@ -105,7 +109,8 @@ mod tests {
         let sender = ReliableSender::new();
         Receiver::spawn(
             address,
-            primary::SingleNodeServer {
+            primary::Node {
+                state: primary::State::Primary,
                 store,
                 peers: Vec::new(),
                 sender,
@@ -154,7 +159,8 @@ mod tests {
         );
         Receiver::spawn(
             address_primary,
-            primary::SingleNodeServer {
+            primary::Node {
+                state: primary::State::Primary,
                 store: create_store("primary"),
                 peers: vec![address_replica],
                 sender,
