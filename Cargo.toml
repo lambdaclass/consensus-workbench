@@ -20,7 +20,7 @@ path = "src/single_node/main.rs"
 
 [[bin]]
 name = "node_replication"
-path = "src/primary_replica/main.rs"
+path = "src/primary_backup/main.rs"
 
 
 [dependencies]
