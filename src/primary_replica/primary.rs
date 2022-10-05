@@ -1,5 +1,6 @@
-/// This modules contains a basic implementation os a primary node message handler
+/// This module contains a basic implementation of a primary node message handler
 /// Every Set command to a primary node will be relayed on the `replica_socket` node
+/// TODO update this doc
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -23,11 +24,13 @@ pub struct Node {
 }
 
 /// The state of a node viewed as a state-machine.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub enum State {
     Primary,
     Backup,
 }
+
+use State::*;
 
 #[async_trait]
 impl MessageHandler for Node {
@@ -35,8 +38,8 @@ impl MessageHandler for Node {
         let request = bincode::deserialize(&bytes)?;
         info!("Received request {:?}", request);
 
-        let result = match request {
-            Command::Set { key, value } => {
+        let result = match (self.state, request) {
+            (Primary, Command::Set { key, value }) => {
                 // TODO review: since we're always using the same serialization format,
                 // would it make sense to always handle serialization inside the networking calls?
                 let sync_message: Bytes = bincode::serialize(&Command::SyncSet {
@@ -55,7 +58,12 @@ impl MessageHandler for Node {
 
                 self.store.write(key.into(), value.into()).await
             }
-            Command::Get { key } => self.store.read(key.clone().into()).await,
+            (Backup, Command::SyncSet { key, value }) => {
+                self.store
+                    .write(key.clone().into(), value.clone().into())
+                    .await
+            }
+            (_, Command::Get { key }) => self.store.read(key.clone().into()).await,
             _ => Err(anyhow!("Unhandled command")),
         };
 

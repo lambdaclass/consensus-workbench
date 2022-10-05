@@ -9,7 +9,6 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use crate::primary::State;
 
 mod primary;
-mod replica;
 
 #[derive(Parser)]
 #[clap(author, version, about)]
@@ -45,11 +44,11 @@ async fn main() {
     // check if node should start as replica
     match cli.replica {
         false => {
+            // TODO add constructor methods for this
             let store = Store::new(".db_primary").unwrap();
             info!("Primary: Running as primary on {}.", address);
 
             // if not a replica, see if there is a parameter of a socket to replicate to
-            // TODO add a constructor for this
             let server = primary::Node {
                 state: State::Primary,
                 store,
@@ -64,8 +63,14 @@ async fn main() {
             Receiver::spawn(address, server).await.unwrap();
         }
         true => {
+            // TODO add constructor methods for this
             let store = Store::new(".db_replica").unwrap();
-            let node = replica::ReplicaNodeServer { store };
+            let node = primary::Node {
+                state: State::Backup,
+                store,
+                peers: vec![],
+                sender: ReliableSender::new(),
+            };
             info!(
                 "Replica: Running as replica on {}, waiting for commands from the primary node...",
                 address
@@ -150,11 +155,13 @@ mod tests {
     async fn test_replicated_server() {
         let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
         let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
-        let sender = ReliableSender::new();
         Receiver::spawn(
             address_replica,
-            replica::ReplicaNodeServer {
+            primary::Node {
                 store: create_store("replica"),
+                state: State::Backup,
+                peers: vec![],
+                sender: ReliableSender::new(),
             },
         );
         Receiver::spawn(
@@ -163,7 +170,7 @@ mod tests {
                 state: primary::State::Primary,
                 store: create_store("primary"),
                 peers: vec![address_replica],
-                sender,
+                sender: ReliableSender::new(),
             },
         );
         sleep(Duration::from_millis(10)).await;
