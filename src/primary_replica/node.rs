@@ -1,6 +1,6 @@
 use clap::Parser;
 use lib::{
-    network::{Receiver, SimpleSender},
+    network::{Receiver, ReliableSender},
     store::Store,
 };
 use log::info;
@@ -51,7 +51,7 @@ async fn main() {
                 store,
                 // TODO will eventually handle multiple peers, but for now we keep passing the single replica
                 peers: vec![cli.replicate_to.unwrap()],
-                sender: SimpleSender::new(),
+                sender: ReliableSender::new(),
             };
             cli.replicate_to
                 .is_some()

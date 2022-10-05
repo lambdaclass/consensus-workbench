@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::sink::SinkExt as _;
 use lib::{
-    network::{MessageHandler, SimpleSender, Writer},
+    network::{MessageHandler, ReliableSender, Writer},
     store::Store,
 };
 use log::info;
@@ -18,7 +18,7 @@ use lib::command::Command;
 pub struct SingleNodeServer {
     pub store: Store,
     pub peers: Vec<SocketAddr>,
-    pub sender: SimpleSender,
+    pub sender: ReliableSender,
 }
 
 pub enum NodeState {
@@ -34,21 +34,21 @@ impl MessageHandler for SingleNodeServer {
 
         let result = match request {
             Command::Set { key, value } => {
-                // synced set
+                // TODO review: since we're always using the same serialization format,
+                // would it make sense to always handle serialization inside the networking calls?
+                let sync_message: Bytes = bincode::serialize(&Command::SyncSet {
+                    key: key.clone(),
+                    value: value.clone(),
+                })
+                .unwrap()
+                .into();
 
-                // TODO review if there's a better network primitive for sending to all peers
-                for peer in self.peers.iter() {
-                    // TODO review: since we're always using the same serialization format,
-                    // would it make sense to always handle serialization inside the networking calls?
-                    let sync_message: Bytes = bincode::serialize(&Command::SyncSet {
-                        key: key.clone(),
-                        value: value.clone(),
-                    })
-                    .unwrap()
-                    .into();
-
-                    self.sender.send(*peer, sync_message).await;
-                }
+                // forward the command to all replicas and wait for them to respond
+                let handlers = self
+                    .sender
+                    .broadcast(self.peers.to_vec(), sync_message)
+                    .await;
+                futures::future::join_all(handlers).await;
 
                 self.store.write(key.into(), value.into()).await
             }
