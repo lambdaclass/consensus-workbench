@@ -4,7 +4,6 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use clap::Parser;
-use futures::sink::SinkExt as _;
 use lib::{
     network::{MessageHandler, Receiver, Writer},
     store::Store,
@@ -51,8 +50,7 @@ impl MessageHandler for Node {
         let result = result.map_err(|e| e.to_string());
 
         info!("Sending response {:?}", result);
-        let reply = bincode::serialize(&result)?;
-        Ok(writer.send(reply.into()).await?)
+        Ok(writer.send(result).await?)
     }
 }
 

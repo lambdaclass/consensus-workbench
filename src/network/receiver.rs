@@ -4,14 +4,25 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::SplitSink;
 use futures::stream::StreamExt as _;
+use futures::SinkExt;
 use log::{debug, warn};
+use serde::Serialize;
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-/// Convenient alias for the writer end of the TCP channel.
-pub type Writer = SplitSink<Framed<TcpStream, LengthDelimitedCodec>, Bytes>;
+pub struct Writer {
+    writer: SplitSink<Framed<TcpStream, LengthDelimitedCodec>, Bytes>,
+}
+
+impl Writer {
+    pub async fn send<T: Serialize>(&mut self, message: T) -> Result<()> {
+        let data: Bytes = bincode::serialize(&message).unwrap().into();
+        self.writer.send(data).await?;
+        Ok(())
+    }
+}
 
 #[async_trait]
 pub trait MessageHandler: Clone + Send + Sync + 'static {
@@ -62,7 +73,8 @@ impl<Handler: MessageHandler> Receiver<Handler> {
     async fn spawn_runner(socket: TcpStream, peer: SocketAddr, mut handler: Handler) {
         tokio::spawn(async move {
             let transport = Framed::new(socket, LengthDelimitedCodec::new());
-            let (mut writer, mut reader) = transport.split();
+            let (writer, mut reader) = transport.split();
+            let mut writer = Writer { writer };
             while let Some(frame) = reader.next().await {
                 match frame.map_err(|e| NetworkError::FailedToReceiveMessage(peer, e)) {
                     Ok(message) => {
@@ -87,7 +99,6 @@ mod tests {
     use super::*;
 
     use bytes::Bytes;
-    use futures::sink::SinkExt as _;
     use tokio::sync::mpsc::channel;
     use tokio::sync::mpsc::Sender;
     use tokio::time::{sleep, Duration};
@@ -105,7 +116,7 @@ mod tests {
     impl MessageHandler for TestHandler {
         async fn dispatch(&mut self, writer: &mut Writer, message: Bytes) -> Result<()> {
             // Reply with an ACK.
-            let _ = writer.send(Bytes::from("Ack")).await;
+            let _ = writer.writer.send(Bytes::from("Ack")).await;
 
             // Deserialize the message.
             let message = bincode::deserialize(&message).unwrap();
