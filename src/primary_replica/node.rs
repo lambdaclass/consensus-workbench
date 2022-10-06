@@ -2,6 +2,9 @@ use clap::Parser;
 use lib::network::Receiver;
 use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use lib::command::Command;
+use bytes::Bytes;
+use lib::network::SimpleSender;
 
 use crate::primary::Node;
 
@@ -20,7 +23,7 @@ struct Cli {
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
     address: IpAddr,
     /// if running as a replica, this is the address of the primary
-    #[clap(short, long, value_parser, value_name = "ADDR")]
+    #[clap(long, value_parser, value_name = "ADDR")]
     primary: Option<SocketAddr>,
     /// Store name, useful to have several nodes in same machine.
     #[clap(short, long)]
@@ -45,19 +48,31 @@ async fn main() {
         false => {
             info!("Primary: Running as primary on {}.", address);
 
-            // TODO we will eventually handle multiple peers, but for now we keep passing the single replica
-            cli.primary
-                .is_some()
-                .then(|| info!("Primary: Replicating to {}.", cli.primary.unwrap()));
-            
             let db_name = db_name(cli.db_name.unwrap_or("primary".to_string()));
-            Node::primary(vec![cli.primary.unwrap()], &db_name)
+            Node::primary(&db_name)
         }
         true => {
             info!(
                 "Replica: Running as replica on {}, waiting for commands from the primary node...",
                 address
             );
+
+            cli.primary
+                .is_some()
+                .then(|| info!("Subscribing to primary: {}.", cli.primary.unwrap()));
+
+            // TODO: this "Subscribe" message is sent here for testing purposes.
+            //       But it shouldn't be here. We should have an initialization loop
+            //       inside the actual replica node to handle the response, deal with
+            //       errors, and eventually reconnect to a new primary.
+            let mut sender = SimpleSender::new();
+            let subscribe_message: Bytes = bincode::serialize(&Command::Subscribe {
+                address: address,
+            })
+            .unwrap()
+            .into();
+            sender.send(cli.primary.unwrap(), subscribe_message).await;
+
             let db_name = db_name(cli.db_name.unwrap_or("replica".to_string()));
             Node::backup(&db_name)
         }

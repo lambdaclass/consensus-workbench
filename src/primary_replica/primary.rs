@@ -10,6 +10,7 @@ use lib::{
     store::Store,
 };
 use log::info;
+use std::sync::{Arc,Mutex};
 use std::net::SocketAddr;
 
 use lib::command::Command;
@@ -19,7 +20,7 @@ use lib::command::Command;
 pub struct Node {
     pub state: State,
     pub store: Store,
-    pub peers: Vec<SocketAddr>,
+    pub peers: Arc<Mutex<Vec<SocketAddr>>>,
     pub sender: ReliableSender,
 }
 
@@ -33,11 +34,11 @@ pub enum State {
 use State::*;
 
 impl Node {
-    pub fn primary(peers: Vec<SocketAddr>, db_path: &str) -> Self {
+    pub fn primary(db_path: &str) -> Self {
         Self {
             state: Primary,
             store: Store::new(db_path).unwrap(),
-            peers,
+            peers: Arc::new(Mutex::new(vec![])),
             sender: ReliableSender::new(),
         }
     }
@@ -46,7 +47,7 @@ impl Node {
         Self {
             state: Backup,
             store: Store::new(db_path).unwrap(),
-            peers: vec![],
+            peers: Arc::new(Mutex::new(vec![])),
             sender: ReliableSender::new(),
         }
     }
@@ -60,28 +61,20 @@ impl MessageHandler for Node {
 
         let result = match (self.state, request) {
             (Primary, Command::Set { key, value }) => {
-                // TODO review: since we're always using the same serialization format,
-                // would it make sense to always handle serialization inside the networking calls?
-                let sync_message: Bytes = bincode::serialize(&Command::SyncSet {
-                    key: key.clone(),
-                    value: value.clone(),
-                })
-                .unwrap()
-                .into();
-
-                // forward the command to all replicas and wait for them to respond
-                let handlers = self
-                    .sender
-                    .broadcast(self.peers.to_vec(), sync_message)
-                    .await;
-                futures::future::join_all(handlers).await;
+                self.forward_to_replicas(&key, &value).await;
 
                 self.store.write(key.into(), value.into()).await
             }
             (Backup, Command::SyncSet { key, value }) => {
-                self.store
-                    .write(key.clone().into(), value.clone().into())
-                    .await
+                self.forward_to_replicas(&key, &value).await;
+
+                self.store.write(key.into(), value.into()).await
+            }
+            (_, Command::Subscribe { address }) => {
+                let mut peers = self.peers.lock().unwrap();
+                peers.push(address);
+                info!("Peers: {:?}", peers.to_vec());
+                Ok(None)
             }
             (_, Command::Get { key }) => self.store.read(key.clone().into()).await,
             _ => Err(anyhow!("Unhandled command")),
@@ -93,5 +86,36 @@ impl MessageHandler for Node {
         info!("Sending response {:?}", result);
         let reply = bincode::serialize(&result)?;
         Ok(writer.send(reply.into()).await?)
+    }
+}
+
+impl Node {
+    async fn forward_to_replicas(&mut self, key: &String, value: &String) {
+        // TODO review: since we're always using the same serialization format,
+        // would it make sense to always handle serialization inside the networking calls?
+        let sync_message: Bytes = bincode::serialize(&Command::SyncSet {
+            key: key.clone(),
+            value: value.clone(),
+        })
+        .unwrap()
+        .into();
+
+        // Need to lock the shared self.peers variable, but it needs to be done in
+        // its own scope to release the lock before the .await
+        // See https://tokio.rs/tokio/tutorial/shared-state in section
+        // "Holding a MutexGuard across an .await" for more info
+        let peers_clone;
+        {
+            let peers_lock = self.peers.lock().unwrap();
+            peers_clone = peers_lock.clone();
+        }
+
+        // forward the command to all replicas and wait for them to respond
+        info!("Forwarding set to {:?}", peers_clone.to_vec());
+        let handlers = self
+            .sender
+            .broadcast(peers_clone.to_vec(), sync_message)
+            .await;
+        futures::future::join_all(handlers).await;
     }
 }
