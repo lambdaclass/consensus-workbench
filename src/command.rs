@@ -7,13 +7,9 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
-#[derive(Debug, Serialize, Deserialize, Parser)]
+#[derive(Debug, Serialize, Deserialize, Parser, Clone)]
 #[clap()]
 pub enum Command {
-    // node-generated commands (TODO: this could be part of a different enum)
-    SyncSet { key: String, value: String },
-    Subscribe { address: SocketAddr},
-    // user-generated commands
     Set { key: String, value: String },
     Get { key: String },
 }

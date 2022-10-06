@@ -1,6 +1,6 @@
 /// This modules implements the most basic form of distributed system, a single node server that handles
 /// client requests to a key/value store. There is no replication and this no fault-tolerance.
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
 use clap::Parser;
@@ -44,7 +44,6 @@ impl MessageHandler for Node {
                     .await
             }
             Command::Get { key } => self.store.read(key.clone().into()).await,
-            _ => Err(anyhow!("Unhandled command")),
         };
 
         // convert the error into something serializable

@@ -1,12 +1,11 @@
+use bytes::Bytes;
 use clap::Parser;
 use lib::network::Receiver;
+use lib::network::SimpleSender;
 use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use lib::command::Command;
-use bytes::Bytes;
-use lib::network::SimpleSender;
 
-use crate::node::Node;
+use crate::node::{Message, Node};
 
 mod node;
 
@@ -56,11 +55,9 @@ async fn main() {
         //       inside the actual replica node to handle the response, deal with
         //       errors, and eventually reconnect to a new primary.
         let mut sender = SimpleSender::new();
-        let subscribe_message: Bytes = bincode::serialize(&Command::Subscribe {
-            address: address,
-        })
-        .unwrap()
-        .into();
+        let subscribe_message: Bytes = bincode::serialize(&Message::Subscribe { address })
+            .unwrap()
+            .into();
         sender.send(primary_address, subscribe_message).await;
 
         let db_name = db_name(cli.db_name.unwrap_or("replica".to_string()));
