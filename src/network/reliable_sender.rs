@@ -6,6 +6,7 @@ use log::{debug, warn};
 use rand::prelude::SliceRandom as _;
 use rand::rngs::SmallRng;
 use rand::SeedableRng as _;
+use serde::Serialize;
 use std::cmp::min;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
@@ -53,8 +54,9 @@ impl ReliableSender {
     }
 
     /// Reliably send a message to a specific address.
-    pub async fn send(&mut self, address: SocketAddr, data: Bytes) -> CancelHandler {
+    pub async fn send<T: Serialize>(&mut self, address: SocketAddr, message: T) -> CancelHandler {
         let (sender, receiver) = oneshot::channel();
+        let data: Bytes = bincode::serialize(&message).unwrap().into();
         self.connections
             .entry(address)
             .or_insert_with(|| Self::spawn_connection(address))
@@ -69,14 +71,14 @@ impl ReliableSender {
 
     /// Broadcast the message to all specified addresses in a reliable manner. It returns a vector of
     /// cancel handlers ordered as the input `addresses` vector.
-    pub async fn broadcast(
+    pub async fn broadcast<T: Serialize + Clone>(
         &mut self,
         addresses: Vec<SocketAddr>,
-        data: Bytes,
+        message: T,
     ) -> Vec<CancelHandler> {
         let mut handlers = Vec::new();
         for address in addresses {
-            let handler = self.send(address, data.clone()).await;
+            let handler = self.send(address, message.clone()).await;
             handlers.push(handler);
         }
         handlers
@@ -84,15 +86,15 @@ impl ReliableSender {
 
     /// Pick a few addresses at random (specified by `nodes`) and send the message only to them.
     /// It returns a vector of cancel handlers with no specific order.
-    pub async fn lucky_broadcast(
+    pub async fn lucky_broadcast<T: Serialize + Clone>(
         &mut self,
         mut addresses: Vec<SocketAddr>,
-        data: Bytes,
+        message: T,
         nodes: usize,
     ) -> Vec<CancelHandler> {
         addresses.shuffle(&mut self.rng);
         addresses.truncate(nodes);
-        self.broadcast(addresses, data).await
+        self.broadcast(addresses, message).await
     }
 }
 
@@ -264,7 +266,7 @@ mod tests {
 
         // Make the network sender and send the message.
         let mut sender = ReliableSender::new();
-        let cancel_handler = sender.send(address, Bytes::from(message)).await;
+        let cancel_handler = sender.send(address, message).await;
 
         // Ensure we get back an acknowledgement.
         assert!(cancel_handler.await.is_ok());
@@ -290,7 +292,7 @@ mod tests {
 
         // Make the network sender and send the message.
         let mut sender = ReliableSender::new();
-        let cancel_handlers = sender.broadcast(addresses, Bytes::from(message)).await;
+        let cancel_handlers = sender.broadcast(addresses, message).await;
 
         // Ensure we get back an acknowledgement for each message.
         assert!(try_join_all(cancel_handlers).await.is_ok());
@@ -305,7 +307,7 @@ mod tests {
         let address = "127.0.0.1:5300".parse::<SocketAddr>().unwrap();
         let message = "Hello, world!";
         let mut sender = ReliableSender::new();
-        let cancel_handler = sender.send(address, Bytes::from(message)).await;
+        let cancel_handler = sender.send(address, message).await;
 
         // Run a TCP server.
         sleep(Duration::from_millis(50)).await;
@@ -326,6 +328,7 @@ mod tests {
             let (mut writer, mut reader) = transport.split();
             match reader.next().await {
                 Some(Ok(received)) => {
+                    let received: &str = bincode::deserialize(&received).unwrap();
                     assert_eq!(received, expected);
                     writer.send(Bytes::from("Ack")).await.unwrap()
                 }

@@ -60,14 +60,10 @@ impl MessageHandler for Node {
 
         let result = match (self.state, request) {
             (Primary, Command::Set { key, value }) => {
-                // TODO review: since we're always using the same serialization format,
-                // would it make sense to always handle serialization inside the networking calls?
-                let sync_message: Bytes = bincode::serialize(&Command::SyncSet {
+                let sync_message = Command::SyncSet {
                     key: key.clone(),
                     value: value.clone(),
-                })
-                .unwrap()
-                .into();
+                };
 
                 // forward the command to all replicas and wait for them to respond
                 let handlers = self

@@ -1,13 +1,12 @@
 use crate::network::ReliableSender;
 use anyhow::{anyhow, Result};
-use bytes::Bytes;
 use std::fmt;
 
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
-#[derive(Debug, Serialize, Deserialize, Parser)]
+#[derive(Debug, Serialize, Deserialize, Parser, Clone)]
 #[clap()]
 pub enum Command {
     // node-generated commands (TODO: this could be part of a different enum)
@@ -22,8 +21,7 @@ impl Command {
     pub async fn send_to(&self, address: SocketAddr) -> Result<Option<String>> {
         let mut sender = ReliableSender::new();
 
-        let message: Bytes = bincode::serialize(self)?.into();
-        let reply_handler = sender.send(address, message).await;
+        let reply_handler = sender.send(address, self).await;
 
         let response = reply_handler.await?;
         let response: Result<Option<String>, String> = bincode::deserialize(&response)?;
