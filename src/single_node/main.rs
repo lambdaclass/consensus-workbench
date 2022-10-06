@@ -27,12 +27,12 @@ struct Cli {
 
 #[derive(Clone)]
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
-struct SingleNodeServer {
+struct Node {
     pub store: Store,
 }
 
 #[async_trait]
-impl MessageHandler for SingleNodeServer {
+impl MessageHandler for Node {
     async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
         let request = bincode::deserialize(&bytes)?;
         info!("Received request {:?}", request);
@@ -70,9 +70,7 @@ async fn main() {
 
     let address = SocketAddr::new(cli.address, cli.port);
     let store = Store::new(".db_single_node").unwrap();
-    Receiver::spawn(address, SingleNodeServer { store })
-        .await
-        .unwrap();
+    Receiver::spawn(address, Node { store }).await.unwrap();
 }
 
 #[cfg(test)]
@@ -94,7 +92,7 @@ mod tests {
             .unwrap();
 
         let address: SocketAddr = "127.0.0.1:6182".parse().unwrap();
-        Receiver::spawn(address, SingleNodeServer { store });
+        Receiver::spawn(address, Node { store });
         sleep(Duration::from_millis(10)).await;
 
         let reply = Command::Get {

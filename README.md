@@ -13,5 +13,5 @@ Proof of concept Rust implementations for various distributed systems patterns.
 ## Implementations
 
 1. [Single node server](/src/single_node)
-1. [Primary/replica server](/src/primary_replica)
+1. [Primary/backup server](/src/primary_backup)
 1. [Two-phase commit](/src/two_phase_commit) (planned)

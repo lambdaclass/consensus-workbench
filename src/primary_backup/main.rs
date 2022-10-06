@@ -6,16 +6,13 @@ use lib::command::Command;
 use bytes::Bytes;
 use lib::network::SimpleSender;
 
-use crate::primary::Node;
+use crate::node::Node;
 
-mod primary;
+mod node;
 
 #[derive(Parser)]
 #[clap(author, version, about)]
 struct Cli {
-    /// Run as replica
-    #[arg(long, value_parser)]
-    replica: bool,
     /// The network port of the node where to send txs.
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = 6100)]
     port: u16,
@@ -44,38 +41,35 @@ async fn main() {
 
     let address = SocketAddr::new(cli.address, cli.port);
 
-    let node = match cli.replica {
-        false => {
-            info!("Primary: Running as primary on {}.", address);
+    let node = if let Some(primary_address) = cli.primary {
+        info!(
+            "Replica: Running as replica on {}, waiting for commands from the primary node...",
+            address
+        );
 
-            let db_name = db_name(cli.db_name.unwrap_or("primary".to_string()));
-            Node::primary(&db_name)
-        }
-        true => {
-            info!(
-                "Replica: Running as replica on {}, waiting for commands from the primary node...",
-                address
-            );
+        cli.primary
+            .is_some()
+            .then(|| info!("Subscribing to primary: {}.", primary_address));
 
-            cli.primary
-                .is_some()
-                .then(|| info!("Subscribing to primary: {}.", cli.primary.unwrap()));
+        // TODO: this "Subscribe" message is sent here for testing purposes.
+        //       But it shouldn't be here. We should have an initialization loop
+        //       inside the actual replica node to handle the response, deal with
+        //       errors, and eventually reconnect to a new primary.
+        let mut sender = SimpleSender::new();
+        let subscribe_message: Bytes = bincode::serialize(&Command::Subscribe {
+            address: address,
+        })
+        .unwrap()
+        .into();
+        sender.send(primary_address, subscribe_message).await;
 
-            // TODO: this "Subscribe" message is sent here for testing purposes.
-            //       But it shouldn't be here. We should have an initialization loop
-            //       inside the actual replica node to handle the response, deal with
-            //       errors, and eventually reconnect to a new primary.
-            let mut sender = SimpleSender::new();
-            let subscribe_message: Bytes = bincode::serialize(&Command::Subscribe {
-                address: address,
-            })
-            .unwrap()
-            .into();
-            sender.send(cli.primary.unwrap(), subscribe_message).await;
+        let db_name = db_name(cli.db_name.unwrap_or("replica".to_string()));
+        Node::backup(&db_name)
+    } else {
+        info!("Primary: Running as primary on {}.", address);
 
-            let db_name = db_name(cli.db_name.unwrap_or("replica".to_string()));
-            Node::backup(&db_name)
-        }
+        let db_name = db_name(cli.db_name.unwrap_or("primary".to_string()));
+        Node::primary(&db_name)
     };
     Receiver::spawn(address, node).await.unwrap();
 }
@@ -100,15 +94,20 @@ mod tests {
             .with_level(log::LevelFilter::Info)
             .init()
             .unwrap();
+
+        fs::remove_dir_all(db_path("")).unwrap_or_default();
+    }
+
+    fn db_path(suffix: &str) -> String {
+        format!(".db_test/{}", suffix)
     }
 
     #[tokio::test]
     async fn test_only_primary_server() {
-        fs::remove_dir_all(".db_test_primary1").unwrap_or_default();
         let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
         Receiver::spawn(
             address,
-            primary::Node::primary(Vec::new(), ".db_test_primary1"),
+            node::Node::primary(Vec::new(), &db_path("primary1")),
         );
         sleep(Duration::from_millis(10)).await;
 
@@ -147,10 +146,10 @@ mod tests {
 
         let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
         let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
-        Receiver::spawn(address_replica, primary::Node::backup(".db_test_backup2"));
+        Receiver::spawn(address_replica, node::Node::backup(&db_path("backup2")));
         Receiver::spawn(
             address_primary,
-            primary::Node::primary(vec![address_replica], ".db_test_primary2"),
+            node::Node::primary(vec![address_replica], &db_path("primary2")),
         );
         sleep(Duration::from_millis(10)).await;
 
