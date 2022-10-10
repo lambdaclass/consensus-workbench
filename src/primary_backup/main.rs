@@ -80,7 +80,7 @@ fn db_name(cli: &Cli, default: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lib::command::Command;
+    use lib::command::ClientCommand;
     use std::fs;
     use tokio::time::{sleep, Duration};
 
@@ -105,7 +105,7 @@ mod tests {
         });
         sleep(Duration::from_millis(10)).await;
 
-        let reply = Command::Get {
+        let reply = ClientCommand::Get {
             key: "k1".to_string(),
         }
         .send_to(address)
@@ -113,7 +113,7 @@ mod tests {
         .unwrap();
         assert!(reply.is_none());
 
-        let reply = Command::Set {
+        let reply = ClientCommand::Set {
             key: "k1".to_string(),
             value: "v1".to_string(),
         }
@@ -123,7 +123,7 @@ mod tests {
         assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
 
-        let reply = Command::Get {
+        let reply = ClientCommand::Get {
             key: "k1".to_string(),
         }
         .send_to(address)
@@ -165,7 +165,7 @@ mod tests {
         sleep(Duration::from_millis(10)).await;
 
         // get null value
-        let reply = Command::Get {
+        let reply = ClientCommand::Get {
             key: "k1".to_string(),
         }
         .send_to(address_primary)
@@ -174,7 +174,7 @@ mod tests {
         assert!(reply.is_none());
 
         // set a value on primary
-        let reply = Command::Set {
+        let reply = ClientCommand::Set {
             key: "k1".to_string(),
             value: "v1".to_string(),
         }
@@ -185,7 +185,7 @@ mod tests {
         assert_eq!("v1".to_string(), reply.unwrap());
 
         // get value on primary
-        let reply = Command::Get {
+        let reply = ClientCommand::Get {
             key: "k1".to_string(),
         }
         .send_to(address_primary)
@@ -195,7 +195,7 @@ mod tests {
         assert_eq!("v1".to_string(), reply.unwrap());
 
         // get value on replica to make sure it was replicated
-        let _reply = Command::Get {
+        let reply = ClientCommand::Get {
             key: "k1".to_string(),
         }
         .send_to(address_replica)
@@ -207,7 +207,7 @@ mod tests {
         // assert_eq!("v1".to_string(), reply.unwrap());
 
         // should fail since replica should not respond to set commands
-        let reply = Command::Set {
+        let reply = ClientCommand::Set {
             key: "k3".to_string(),
             value: "_".to_string(),
         }

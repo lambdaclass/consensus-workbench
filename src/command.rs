@@ -3,18 +3,44 @@ use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use std::fmt;
 
-use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+use clap::Parser;
 
+<<<<<<< HEAD
 #[derive(Debug, Serialize, Deserialize, Parser, Clone, PartialEq, Eq)]
 #[clap()]
+=======
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+>>>>>>> 8a1ec05 (replicate)
 pub enum Command {
+    Genesis,
+    Client(ClientCommand),
+    Network(NetworkCommand)
+}
+
+                
+#[derive(Debug, Serialize, Deserialize, Clone, Parser, PartialEq)]
+#[clap()]
+pub enum ClientCommand {
+    // user-generated commands
     Set { key: String, value: String },
     Get { key: String },
 }
 
-impl Command {
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum NetworkCommand {
+    Propose {  command_view: CommandView }, // todo: the address should maybe be taken from writer's sink fields? or maybe generalized in dispatch()
+    Lock { socket_addr: SocketAddr, command_view: CommandView },
+    Commit { command_view: CommandView },
+
+    // view change
+    Blame { view: u128 },
+    ViewChange { new_view: u128}
+}
+
+impl ClientCommand {
     /// Send this command over to a server at the given address and return the response.
     pub async fn send_to(&self, address: SocketAddr) -> Result<Option<String>> {
         let mut sender = ReliableSender::new();
@@ -31,5 +57,18 @@ impl Command {
 impl fmt::Display for Command {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
+    }
+}
+
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct CommandView {
+    pub command: ClientCommand, // lock_value
+    pub view: u128,             // lock_view
+}
+
+impl CommandView {
+    pub fn new() -> CommandView {
+        CommandView { command: ClientCommand::Get { key: "-".to_string()}, view: 0 }
     }
 }

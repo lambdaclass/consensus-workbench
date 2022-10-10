@@ -11,7 +11,7 @@ pub type Error = Box<dyn std::error::Error + Send + Sync>;
 struct Cli {
     /// The key/value store command to execute.
     #[clap(subcommand)]
-    command: command::Command,
+    command: command::ClientCommand,
 
     /// The network port of the node where to send txs.
     #[clap(long, short, value_parser, value_name = "INT", default_value_t = 6100)]

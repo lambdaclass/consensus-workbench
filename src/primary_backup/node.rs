@@ -7,47 +7,13 @@ use bytes::Bytes;
 use futures::sink::SinkExt as _;
 use lib::{
     network::{MessageHandler, ReliableSender, Writer},
-    store::Store,
+    store::Store, command::{CommandView, Command, ClientCommand},
 };
 use log::info;
-use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
+use std::{net::SocketAddr, collections::HashSet};
 
-use lib::command::Command as ClientCommand;
+use lib::command::NetworkCommand;
 
-/// The types of messages supported by this implementation's state machine.
-#[derive(Debug, Serialize, Deserialize)]
-pub enum Message {
-    /// A command sent by a a client to this node.
-    Command(ClientCommand),
-
-    /// A request from a peer to replicate a client write command
-    Replicate(ClientCommand),
-
-    /// A backup replica request to subcribe to a primary
-    Subscribe { address: SocketAddr },
-
-    /// A primary node's heartbeat including the currently known peers
-    // this is just for illustration purposes not being used yet
-    Heartbeat { peers: Vec<SocketAddr> },
-}
-
-impl Message {
-    /// Incoming requests can be either messages sent by other nodes or client commands
-    /// (which are server implementation agnostic)
-    /// in which case they are wrapped into Message::Command to treat them uniformly by
-    /// the state machine
-    pub fn deserialize(data: Bytes) -> Result<Self> {
-        // this allows handling both client and peer messages from the same tcp listener
-        // alternatively the network code could be refactored to have different tcp connections
-        // and feeding both types of incoming messages into the same async handler task
-        if let Ok(c) = bincode::deserialize::<ClientCommand>(&data) {
-            Ok(Self::Command(c))
-        } else {
-            bincode::deserialize(&data).map_err(|e| anyhow!(e))
-        }
-    }
-}
 
 #[derive(Clone)]
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
@@ -56,6 +22,16 @@ pub struct Node {
     pub store: Store,
     pub peers: Vec<SocketAddr>,
     pub sender: ReliableSender,
+
+    pub current_primary: SocketAddr,
+
+    pub current_view: u128,
+    command_view_lock: CommandView,
+
+    // the amount of peers which responded with "Lock"
+    // note: if we were to create a QC to store in the blockchain, 
+    // we would need to store signatures from peers here
+    pub lock_responses: HashSet<SocketAddr>
 }
 
 /// The state of a node viewed as a state-machine.
@@ -76,6 +52,10 @@ impl Node {
             store: Store::new(db_path).unwrap(),
             peers: vec![],
             sender: ReliableSender::new(),
+            current_view: 0,
+            command_view_lock: CommandView::new(),
+            lock_responses: HashSet::new(),
+            current_primary: "0.0.0.1:4000".parse::<SocketAddr>().unwrap() 
         }
     }
 
@@ -85,6 +65,17 @@ impl Node {
             store: Store::new(db_path).unwrap(),
             peers: vec![],
             sender: ReliableSender::new(),
+            current_view: 0,
+            command_view_lock: CommandView::new(),
+            lock_responses: HashSet::new(),
+            current_primary: "0.0.0.1:4000".parse::<SocketAddr>().unwrap() 
+        }
+    }
+
+    async fn handle_client_command(&self, command: ClientCommand) -> Result<Option<Vec<u8>>, anyhow::Error> {
+        match command {
+            ClientCommand::Set { key, value } => self.store.write(key.into(), value.into()).await,
+            ClientCommand::Get { key } => self.store.read(key.clone().into()).await,
         }
     }
 }
@@ -96,30 +87,42 @@ impl MessageHandler for Node {
         info!("Received request {:?}", request);
 
         let result = match (self.state, request) {
-            (Primary, Command(Set { key, value })) => {
-                self.forward_to_replicas(Set {
-                    key: key.clone(),
-                    value: value.clone(),
-                })
-                .await;
-                self.store
-                    .write(key.clone().into(), value.clone().into())
-                    .await
-            }
-            (Backup, Replicate(Set { key, value })) => {
-                self.forward_to_replicas(Set {
-                    key: key.clone(),
-                    value: value.clone(),
-                })
-                .await;
-                self.store.write(key.into(), value.into()).await
-            }
-            (_, Subscribe { address }) => {
-                self.peers.push(address);
-                info!("Peers: {:?}", self.peers);
-                Ok(None)
-            }
-            (_, Command(Get { key })) => self.store.read(key.clone().into()).await,
+            (Primary, Command::Client(client_comand)) => {
+                let command = NetworkCommand::Propose { command_view: CommandView {
+                    command: client_comand,
+                    view: self.current_view + 1
+                    }
+                };
+
+                self.broadcast(&command); 
+                Ok(())
+            },
+            (Primary, Command::Network(NetworkCommand::Lock {socket_addr, command_view })) => {
+                self.lock_responses.insert(socket_addr);
+                // broadcast commit, then try commit 
+                // TODO: this really is a function of the amount of omission faults we want the network to tolerate, f<n/2
+                if self.lock_responses.len() >= ((self.peers.len())/2) + 1 {
+                    self.broadcast(&NetworkCommand::Commit { command_view: self.command_view_lock.clone()  }).await;
+                }
+                Ok(())
+            },
+            (Backup, Command::Network(NetworkCommand::Propose { command_view })) => {
+                self.lock_command_view(&command_view);
+                self.send_to_primary(&command_view.command);
+                Ok(())
+
+            },
+            (Backup, Command::Client(client_command)) => {
+                self.send_to_primary(&client_command);
+                Ok(())
+            },
+            (_, Command::Network(NetworkCommand::Commit { command_view })) => {
+                if let Ok(result) = self.try_commit(command_view).await {
+                    info!("Committed command, response was {:?}", result.unwrap_or_default());
+                    return Ok(());
+                }
+                Err(anyhow!("Error committing command"))
+            },
             _ => Err(anyhow!("Unhandled command")),
         };
 
@@ -133,15 +136,50 @@ impl MessageHandler for Node {
 }
 
 impl Node {
-    async fn forward_to_replicas(&mut self, command: ClientCommand) {
-        let sync_message: Bytes = bincode::serialize(&command).unwrap().into();
+    async fn broadcast(&mut self, network_command: &NetworkCommand) {
+        let message: Bytes = bincode::serialize(network_command).unwrap().into();
 
         // forward the command to all replicas and wait for them to respond
-        info!("Forwarding set to {:?}", self.peers.to_vec());
         let handlers = self
             .sender
-            .broadcast(self.peers.to_vec(), sync_message)
+            .broadcast(&self.peers, message)
             .await;
+
         futures::future::join_all(handlers).await;
+    }
+
+    async fn send_to_primary(&mut self, cmd: &ClientCommand) {
+        let message: Bytes = bincode::serialize(cmd).unwrap().into();
+
+        // forward the command to all replicas and wait for them to respond
+        self
+            .sender
+            .send(self.current_primary, message)
+            .await;
+    }
+
+    async fn try_commit(&mut self, command_view: CommandView) -> Result<Option<Vec<u8>>> {
+        // handle command, remove command lock
+        if self.command_view_lock != command_view {
+            // we are trying to commit something that has not been locked correctly, 
+            // so there must have been some fault
+            return Err(anyhow!("Trying to commit a command-view that had not been locked"));
+        }
+
+        // handle command
+        self.lock_responses.clear();
+        self.clear_cmd_view_lock();
+
+        self.handle_client_command(command_view.command).await
+    }
+
+    fn lock_command_view(&mut self, command_view: &CommandView) {
+        if command_view.view != 0 {
+            self.command_view_lock = command_view.clone();
+        }
+    }
+
+    fn clear_cmd_view_lock(&mut self) {
+        self.command_view_lock = CommandView::new();
     }
 }
