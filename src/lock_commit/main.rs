@@ -5,7 +5,7 @@ use lib::network::SimpleSender;
 use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use crate::node::{Message, Node};
+use crate::node::{Node, State};
 
 mod node;
 
@@ -13,14 +13,20 @@ mod node;
 #[clap(author, version, about)]
 struct Cli {
     /// The network port of the node where to send txs.
-    #[clap(short, long, value_parser, value_name = "UINT", default_value_t = 6100)]
+    #[clap(short, long, value_parser, value_name = "UINT", default_value_t = 6101)]
     port: u16,
     /// The network address of the node where to send txs.
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
     address: IpAddr,
     /// if running as a replica, this is the address of the primary
-    #[clap(long, value_parser, value_name = "ADDR")]
-    peers: Vec<SocketAddr>,
+    #[clap(
+        long,
+        value_parser,
+        value_name = "ADDR",
+        use_value_delimiter = true,
+        value_delimiter = ' '
+    )]
+    peers: Option<Vec<SocketAddr>>,
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -32,16 +38,13 @@ async fn main() {
     simple_logger::SimpleLogger::new().env().init().unwrap();
 
     let address = SocketAddr::new(cli.address, cli.port);
-
-    let node = {
-        info!(
-            "Node: Running on {}...",
-            address
-        );
-
-        Node::new(cli.peers, &format!(".db_{}", address.port()), address)
-    };
-
+    let peers = if let Some(list) = cli.peers { list } else { vec!["127.0.0.1:6100".parse().unwrap(),"127.0.0.1:6101".parse().unwrap()] };
+    let node = Node::new(peers, &format!(".db_{}", address.port()), address);
+    info!(
+        "Node: Running on {}. Primary = {}...",
+        node.socket_address,
+        matches!(node.state, State::Primary)
+    );
     Receiver::spawn(address, node).await.unwrap();
 }
 
@@ -54,7 +57,7 @@ fn db_name(cli: &Cli, default: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lib::command::{Command, ClientCommand};
+    use lib::command::ClientCommand;
     use std::fs;
     use tokio::time::{sleep, Duration};
 
@@ -116,10 +119,21 @@ mod tests {
 
         let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
         let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
-        Receiver::spawn(address_replica, node::Node::new(vec![address_primary, address_replica],&db_path("backup2"), address_replica));
+        Receiver::spawn(
+            address_replica,
+            node::Node::new(
+                vec![address_primary, address_replica],
+                &db_path("backup2"),
+                address_replica,
+            ),
+        );
         Receiver::spawn(
             address_primary,
-            node::Node::new(vec![address_primary, address_replica], &db_path("primary2"), address_primary),
+            node::Node::new(
+                vec![address_primary, address_replica],
+                &db_path("primary2"),
+                address_primary,
+            ),
         );
         sleep(Duration::from_millis(10)).await;
 
@@ -160,10 +174,8 @@ mod tests {
         .send_to(address_replica)
         .await
         .unwrap();
-
-        // FIX Node currently is not replicating. Uncomment after fix
-        // assert!(reply.is_some());
-        // assert_eq!("v1".to_string(), reply.unwrap());
+        assert!(reply.is_some());
+        assert_eq!("v1".to_string(), reply.unwrap());
 
         // should fail since replica should not respond to set commands
         let reply = ClientCommand::Set {

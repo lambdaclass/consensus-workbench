@@ -4,17 +4,16 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::sink::SinkExt as _;
+use futures::{sink::SinkExt as _};
 use lib::{
+    command::{ClientCommand, Command, CommandView},
     network::{MessageHandler, ReliableSender, Writer},
-    store::Store, command::{CommandView, Command, ClientCommand},
+    store::Store,
 };
 use log::info;
-use tokio::time::error;
-use std::{net::SocketAddr, collections::HashSet};
+use std::{collections::HashSet, net::SocketAddr, sync::{Arc, Mutex}};
 
 use lib::command::NetworkCommand;
-
 
 #[derive(Clone)]
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
@@ -28,12 +27,12 @@ pub struct Node {
     pub current_primary_index: usize,
 
     pub current_view: u128,
-    command_view_lock: CommandView,
+    command_view_lock: Arc<Mutex<CommandView>>,
 
     // the amount of peers which responded with "Lock"
-    // note: if we were to create a QC to store in the blockchain, 
+    // note: if we were to create a QC to store in the blockchain,
     // we would need to store signatures from peers here
-    pub lock_responses: HashSet<SocketAddr>
+    pub lock_responses: Arc<Mutex<HashSet<SocketAddr>>>,
 }
 
 /// The state of a node viewed as a state-machine.
@@ -47,118 +46,177 @@ use ClientCommand::*;
 use Message::*;
 use State::*;
 
+#[async_trait]
+impl MessageHandler for Node {
+    async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
+        let request = bincode::deserialize(&bytes)?;
+        info!("{}: Received request {:?}", self.socket_address, request);
+        let _ = writer.send(Bytes::from("ACK")).await?;
+
+        let result = match (self.state, request) {
+            (_, Command::Client(cmd @ ClientCommand::Get { key: _ })) => {
+                // as a 'hack': to make it simpler, we can just forward the Get command to handle_client_message
+                // if you comment this match code block, Get requests will also require quorum
+                self.handle_client_command(cmd).await
+            }
+            (Primary, Command::Client(client_comand)) => {
+                let command_view = CommandView {
+                    command: client_comand,
+                    view: self.current_view + 1,
+                };
+
+                let command = NetworkCommand::Propose {
+                    command_view: command_view.clone(),
+                };
+
+                // since we are primary, we lock the command view and add it to the quorum set
+                self.lock_command_view(&command_view);
+                self.lock_responses.clone().lock().unwrap().insert(self.socket_address);
+
+                info!("Received command, broadcasting Propose");
+                self.broadcast(command).await;
+                Ok(None)
+            }
+            (
+                Primary,
+                Command::Network(NetworkCommand::Lock {
+                    socket_addr,
+                    command_view,
+                }),
+            ) => {
+                let _ = self.lock_responses.lock().unwrap().insert(socket_addr);
+                let response_count = self.lock_responses.lock().unwrap().len();
+                // TODO: in reality this is a function of the amount of omission faults we want the network to tolerate, f<n/2
+                let quorum_count = ((self.peers.len()) / 2) + 1;
+
+                info!("Received lock, did we get quorum? {} responses so far vs expected quorum of {} ", response_count, quorum_count);
+
+                // broadcast commit, then try commit
+                if response_count >=  quorum_count{
+                    info!("Quorum achieved, committing and sending out Commit message!");
+                    self.try_commit(command_view.clone()).await.expect("Error committing command as primary");
+                    self.broadcast(NetworkCommand::Commit {
+                        command_view: command_view,
+                    })
+                    .await;
+                }
+                Ok(None)
+            }
+            (_, Command::Network(NetworkCommand::Propose { command_view })) => {
+                // TODO: You should only lock if view number is expected
+                self.lock_command_view(&command_view);
+                info!(
+                    "{}: View-command locked, sending out Lock message",
+                    self.socket_address
+                );
+
+                let lock_command = Command::Network(NetworkCommand::Lock {
+                    socket_addr: self.socket_address,
+                    command_view: command_view,
+                });
+                
+                self.send_to_primary(lock_command).await;
+                Ok(None) 
+            }
+            (Backup, Command::Client(client_command)) => {
+                info!("Received client command, forwarding to primary");
+                self.send_to_primary(Command::Client(client_command)).await;
+                Ok(None) 
+            }
+            (_, Command::Network(NetworkCommand::Commit { command_view })) => {
+                if let Ok(result) = self.try_commit(command_view).await {
+                    info!(
+                        "Committed command, response was {:?}",
+                        result.unwrap()
+                    );
+                    return Ok(());
+                }
+                Err(anyhow!("Error committing command"))
+            }
+            _ => {
+                info!("{} :unhandled command", self.socket_address);
+                Err(anyhow!("Unhandled command"))
+            }
+        };
+
+        info!("{}: Sending response {:?}", self.socket_address, result);
+        Ok(())
+    }
+}
+
 impl Node {
     pub fn new(peers: Vec<SocketAddr>, db_path: &str, address: SocketAddr) -> Self {
         Self {
-            state: if address == *peers.get(0).unwrap() { Primary } else { Backup },
+            state: if address == *peers.get(0).unwrap() {
+                Primary
+            } else {
+                Backup
+            },
             store: Store::new(db_path).unwrap(),
             peers: peers,
             sender: ReliableSender::new(),
             current_view: 0,
-            command_view_lock: CommandView::new(),
-            lock_responses: HashSet::new(),
+            command_view_lock: Arc::new(Mutex::new(CommandView::new())),
+            lock_responses: Arc::new(Mutex::new(HashSet::new())),
             current_primary_index: 0,
             socket_address: address,
         }
     }
 
-    async fn handle_client_command(&self, command: ClientCommand) -> Result<Option<Vec<u8>>, anyhow::Error> {
+    async fn handle_client_command(
+        &self,
+        command: ClientCommand,
+    ) -> Result<Option<Vec<u8>>, anyhow::Error> {
         match command {
             ClientCommand::Set { key, value } => self.store.write(key.into(), value.into()).await,
             ClientCommand::Get { key } => self.store.read(key.clone().into()).await,
         }
     }
-}
 
-#[async_trait]
-impl MessageHandler for Node {
-    async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
-        let request = Message::deserialize(bytes)?;
-        info!("Received request {:?}", request);
+    async fn broadcast(&mut self, network_command: NetworkCommand) {
+        let message: Bytes = bincode::serialize(&Command::Network(network_command))
+            .unwrap()
+            .into();
 
-        let result = match (self.state, request) {
-            (Primary, Command::Client(client_comand)) => {
-                let command = NetworkCommand::Propose { command_view: CommandView {
-                    command: client_comand,
-                    view: self.current_view + 1
-                    }
-                };
-                info!("test");
-                self.broadcast(&command); 
-                Ok(())
-            },
-            (Primary, Command::Network(NetworkCommand::Lock {socket_addr, command_view })) => {
-                self.lock_responses.insert(socket_addr);
-                // broadcast commit, then try commit 
-                // TODO: this really is a function of the amount of omission faults we want the network to tolerate, f<n/2
-                if self.lock_responses.len() >= ((self.peers.len())/2) + 1 {
-                    self.broadcast(&NetworkCommand::Commit { command_view: self.command_view_lock.clone()  }).await;
-                }
-                Ok(())
-            },
-            (Backup, Command::Network(NetworkCommand::Propose { command_view })) => {
-
-                self.lock_command_view(&command_view);
-                self.send_to_primary(&command_view.command).await;
-                Ok(())
-
-            },
-            (Backup, Command::Client(client_command)) => {
-                self.send_to_primary(&client_command).await;
-                Ok(())
-            },
-            (_, Command::Network(NetworkCommand::Commit { command_view })) => {
-                if let Ok(result) = self.try_commit(command_view).await {
-                    info!("Committed command, response was {:?}", result.unwrap_or_default());
-                    return Ok(());
-                }
-                Err(anyhow!("Error committing command"))
-            },
-            _ => Err(anyhow!("Unhandled command")),
-        };
-
-        // convert the error into something serializable
-        let result = result.map_err(|e| e.to_string());
-
-        info!("Sending response {:?}", result);
-        let reply = bincode::serialize(&result)?;
-        Ok(writer.send(reply.into()).await?)
-    }
-}
-
-impl Node {
-    async fn broadcast(&mut self, network_command: &NetworkCommand) {
-        let message: Bytes = bincode::serialize(network_command).unwrap().into();
+        let other_peers = self
+            .peers
+            .iter()
+            .copied()
+            .filter(|x| *x != self.socket_address)
+            .collect();
 
         // forward the command to all replicas and wait for them to respond
-        let handlers = self
-            .sender
-            .broadcast(&self.peers, message)
-            .await;
+        let handlers = self.sender.broadcast(&other_peers, message).await;
 
         futures::future::join_all(handlers).await;
     }
 
-    async fn send_to_primary(&mut self, cmd: &ClientCommand) {
-        let message: Bytes = bincode::serialize(cmd).unwrap().into();
+    async fn send_to_primary(&mut self, cmd: Command) {
+        let message: Bytes = bincode::serialize(&cmd)
+            .unwrap()
+            .into();
+        
+        let primary_address = *(self
+            .peers
+            .get(self.current_primary_index)
+            .expect("Error getting primary"));
 
         // forward the command to all replicas and wait for them to respond
-        self
-            .sender
-            .send(*(self.peers.get(self.current_primary_index).expect("Error getting primary")), message)
-            .await;
+        let _ = self.sender.send(primary_address, message).await.await;
     }
 
     async fn try_commit(&mut self, command_view: CommandView) -> Result<Option<Vec<u8>>> {
         // handle command, remove command lock
-        if self.command_view_lock != command_view {
-            // we are trying to commit something that has not been locked correctly, 
+        if *self.command_view_lock.lock().unwrap() != command_view {
+            // we are trying to commit something that has not been locked correctly,
             // so there must have been some fault
-            return Err(anyhow!("Trying to commit a command-view that had not been previously locked"));
+            return Err(anyhow!(
+                "Trying to commit a command-view that had not been previously locked"
+            ));
         }
 
         // handle command
-        self.lock_responses.clear();
+        self.lock_responses.lock().unwrap().clear();
         self.clear_cmd_view_lock();
 
         self.handle_client_command(command_view.command).await
@@ -166,11 +224,11 @@ impl Node {
 
     fn lock_command_view(&mut self, command_view: &CommandView) {
         if command_view.view != 0 {
-            self.command_view_lock = command_view.clone();
+            *self.command_view_lock.lock().unwrap() = command_view.clone();
         }
     }
 
     fn clear_cmd_view_lock(&mut self) {
-        self.command_view_lock = CommandView::new();
+        *self.command_view_lock.lock().unwrap() = CommandView::new();
     }
 }
