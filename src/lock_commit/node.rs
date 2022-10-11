@@ -10,6 +10,7 @@ use lib::{
     store::Store, command::{CommandView, Command, ClientCommand},
 };
 use log::info;
+use tokio::time::error;
 use std::{net::SocketAddr, collections::HashSet};
 
 use lib::command::NetworkCommand;
@@ -18,12 +19,13 @@ use lib::command::NetworkCommand;
 #[derive(Clone)]
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
 pub struct Node {
+    pub socket_address: SocketAddr,
     pub state: State,
     pub store: Store,
     pub peers: Vec<SocketAddr>,
     pub sender: ReliableSender,
 
-    pub current_primary: SocketAddr,
+    pub current_primary_index: usize,
 
     pub current_view: u128,
     command_view_lock: CommandView,
@@ -46,29 +48,17 @@ use Message::*;
 use State::*;
 
 impl Node {
-    pub fn primary(db_path: &str) -> Self {
+    pub fn new(peers: Vec<SocketAddr>, db_path: &str, address: SocketAddr) -> Self {
         Self {
-            state: Primary,
+            state: if address == *peers.get(0).unwrap() { Primary } else { Backup },
             store: Store::new(db_path).unwrap(),
-            peers: vec![],
+            peers: peers,
             sender: ReliableSender::new(),
             current_view: 0,
             command_view_lock: CommandView::new(),
             lock_responses: HashSet::new(),
-            current_primary: "0.0.0.1:4000".parse::<SocketAddr>().unwrap() 
-        }
-    }
-
-    pub fn backup(db_path: &str) -> Self {
-        Self {
-            state: Backup,
-            store: Store::new(db_path).unwrap(),
-            peers: vec![],
-            sender: ReliableSender::new(),
-            current_view: 0,
-            command_view_lock: CommandView::new(),
-            lock_responses: HashSet::new(),
-            current_primary: "0.0.0.1:4000".parse::<SocketAddr>().unwrap() 
+            current_primary_index: 0,
+            socket_address: address,
         }
     }
 
@@ -93,7 +83,7 @@ impl MessageHandler for Node {
                     view: self.current_view + 1
                     }
                 };
-
+                info!("test");
                 self.broadcast(&command); 
                 Ok(())
             },
@@ -107,13 +97,14 @@ impl MessageHandler for Node {
                 Ok(())
             },
             (Backup, Command::Network(NetworkCommand::Propose { command_view })) => {
+
                 self.lock_command_view(&command_view);
-                self.send_to_primary(&command_view.command);
+                self.send_to_primary(&command_view.command).await;
                 Ok(())
 
             },
             (Backup, Command::Client(client_command)) => {
-                self.send_to_primary(&client_command);
+                self.send_to_primary(&client_command).await;
                 Ok(())
             },
             (_, Command::Network(NetworkCommand::Commit { command_view })) => {
@@ -154,7 +145,7 @@ impl Node {
         // forward the command to all replicas and wait for them to respond
         self
             .sender
-            .send(self.current_primary, message)
+            .send(*(self.peers.get(self.current_primary_index).expect("Error getting primary")), message)
             .await;
     }
 
@@ -163,7 +154,7 @@ impl Node {
         if self.command_view_lock != command_view {
             // we are trying to commit something that has not been locked correctly, 
             // so there must have been some fault
-            return Err(anyhow!("Trying to commit a command-view that had not been locked"));
+            return Err(anyhow!("Trying to commit a command-view that had not been previously locked"));
         }
 
         // handle command

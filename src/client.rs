@@ -25,7 +25,6 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-
     info!("Node socket: {}{}", cli.address, cli.port);
 
     simple_logger::SimpleLogger::new().env().init()?;

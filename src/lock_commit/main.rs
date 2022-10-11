@@ -20,11 +20,7 @@ struct Cli {
     address: IpAddr,
     /// if running as a replica, this is the address of the primary
     #[clap(long, value_parser, value_name = "ADDR")]
-    primary: Option<SocketAddr>,
-    /// Node name, useful to identify the node and the store.
-    /// (eg. when running several nodes in same machine)
-    #[clap(short, long)]
-    name: Option<String>,
+    peers: Vec<SocketAddr>,
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -37,38 +33,16 @@ async fn main() {
 
     let address = SocketAddr::new(cli.address, cli.port);
 
-    let node = if let Some(primary_address) = cli.primary {
+    let node = {
         info!(
-            "Replica: Running as replica on {}, waiting for commands from the primary node...",
+            "Node: Running on {}...",
             address
         );
 
-        info!("Subscribing to primary: {}.", primary_address);
-
-        // TODO: this "Subscribe" message is sent here for testing purposes.
-        //       But it shouldn't be here. We should have an initialization loop
-        //       inside the actual replica node to handle the response, deal with
-        //       errors, and eventually reconnect to a new primary.
-        let mut sender = SimpleSender::new();
-        let subscribe_message: Bytes = bincode::serialize(&Message::Subscribe { address })
-            .unwrap()
-            .into();
-        sender.send(primary_address, subscribe_message).await;
-
-        Node::backup(&db_name(&cli, &format!("replic-{}", cli.port)[..]))
-    } else {
-        info!("Primary: Running as primary on {}.", address);
-
-        let db_name = db_name(&cli, "primary");
-        Node::primary(&db_name)
+        Node::new(cli.peers, &format!(".db_{}", address.port()), address)
     };
 
-    tokio::spawn(async move {
-        let receiver = Receiver::new(address, node);
-        receiver.run().await;
-    })
-    .await
-    .unwrap();
+    Receiver::spawn(address, node).await.unwrap();
 }
 
 fn db_name(cli: &Cli, default: &str) -> String {
@@ -80,7 +54,7 @@ fn db_name(cli: &Cli, default: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lib::command::ClientCommand;
+    use lib::command::{Command, ClientCommand};
     use std::fs;
     use tokio::time::{sleep, Duration};
 
@@ -98,11 +72,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_only_primary_server() {
         let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
-
-        tokio::spawn(async move {
-            let receiver = Receiver::new(address, node::Node::primary(&db_path("primary1")));
-            receiver.run().await;
-        });
+        Receiver::spawn(
+            address,
+            node::Node::new(vec![address], &db_path("primary1"), address),
+        );
         sleep(Duration::from_millis(10)).await;
 
         let reply = ClientCommand::Get {
@@ -138,30 +111,16 @@ mod tests {
         fs::remove_dir_all(".db_test_primary2").unwrap_or_default();
         fs::remove_dir_all(".db_test_backup2").unwrap_or_default();
 
+        fs::remove_dir_all(".db_test_primary2").unwrap_or_default();
+        fs::remove_dir_all(".db_test_backup2").unwrap_or_default();
+
         let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
         let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
-        tokio::spawn(async move {
-            let receiver = Receiver::new(address_replica, node::Node::backup(&db_path("backup2")));
-            receiver.run().await;
-        });
-        tokio::spawn(async move {
-            let receiver =
-                Receiver::new(address_primary, node::Node::primary(&db_path("primary2")));
-            receiver.run().await;
-        });
-
-        // TODO: this "Subscribe" message is sent here for testing purposes.
-        //       But it shouldn't be here. We should have an initialization loop
-        //       inside the actual replica node to handle the response, deal with
-        //       errors, and eventually reconnect to a new primary.
-        let mut sender = SimpleSender::new();
-        let subscribe_message: Bytes = bincode::serialize(&Message::Subscribe {
-            address: address_replica,
-        })
-        .unwrap()
-        .into();
-        sender.send(address_primary, subscribe_message).await;
-
+        Receiver::spawn(address_replica, node::Node::new(vec![address_primary, address_replica],&db_path("backup2"), address_replica));
+        Receiver::spawn(
+            address_primary,
+            node::Node::new(vec![address_primary, address_replica], &db_path("primary2"), address_primary),
+        );
         sleep(Duration::from_millis(10)).await;
 
         // get null value
