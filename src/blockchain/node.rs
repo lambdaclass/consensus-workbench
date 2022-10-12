@@ -1,13 +1,14 @@
 /// This module contains an implementation nodes that can run in primary or backup mode.
 /// Every Set command to a primary node will be broadcasted reliably for the backup nodes to replicate it.
 /// We plan to add backup promotion in case of primary failure.
-use anyhow::{anyhow, Result, Error};
+use anyhow::{anyhow, Error, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::sink::SinkExt as _;
 use lib::network::{MessageHandler, ReliableSender, Writer};
 use log::info;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::{collections::HashMap, net::SocketAddr};
 
@@ -24,7 +25,7 @@ pub enum Message {
 
     State {
         from: SocketAddr,
-        peers: Vec<SocketAddr>,
+        peers: HashSet<SocketAddr>,
         ledger: Ledger,
     },
 }
@@ -52,8 +53,8 @@ impl Message {
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
 pub struct Node {
     pub address: SocketAddr,
-    // FIXME this ark mutex shouldn't be necessary
-    pub peers: Arc<Mutex<Vec<SocketAddr>>>,
+    // FIXME this arc mutex shouldn't be necessary
+    pub peers: Arc<Mutex<HashSet<SocketAddr>>>,
     pub sender: ReliableSender,
     pub mempool: HashMap<String, ClientCommand>,
     pub ledger: Ledger,
@@ -66,7 +67,11 @@ use crate::ledger::Ledger;
 
 impl Node {
     pub fn new(address: SocketAddr, seed: Option<SocketAddr>) -> Self {
-        let peers = seed.map(|s| vec![s]).unwrap_or_default();
+        let mut peers = HashSet::new();
+        if let Some(seed) = seed {
+            peers.insert(seed);
+        }
+
         Self {
             address,
             peers: Arc::new(Mutex::new(peers)),
@@ -98,7 +103,9 @@ impl MessageHandler for Node {
                         value: value.clone(),
                     };
                     self.mempool.insert(txid.clone(), cmd.clone());
-                    self.forward_to_replicas(txid, cmd).await;
+
+                    let message = Command(txid, cmd);
+                    self.broadcast(message).await;
 
                     // just for consistency return the value, although it's not committed
                     Ok(Some(value))
@@ -107,11 +114,10 @@ impl MessageHandler for Node {
             GetState { reply_to } => {
                 let response;
                 {
+                    // save the peer if later user
                     // FIXME remove locking
                     let mut locked_peers = self.peers.lock().unwrap();
-                    if !locked_peers.contains(&reply_to) {
-                        locked_peers.push(reply_to);
-                    }
+                    locked_peers.insert(reply_to);
 
                     response = State {
                         from: self.address,
@@ -123,8 +129,33 @@ impl MessageHandler for Node {
                 self.sender.send(reply_to, response).await;
                 Ok(None)
             }
-            State { .. } => {
-                todo!()
+            State {
+                from,
+                ledger,
+                peers,
+            } => {
+                {
+                    // learn about new peers
+                    // FIXME remove locking
+                    let mut locked_peers = self.peers.lock().unwrap();
+                    locked_peers.insert(from);
+                    locked_peers.extend(&peers);
+                }
+
+                // if the received chain is longer, prefer it and broadcast it
+                // otherwise ignore
+                if ledger.is_valid() && ledger.length() > self.ledger.length() {
+                    self.ledger = ledger;
+
+                    // FIXME restart mining with new latest block
+                    let message = State {
+                        from,
+                        ledger: self.ledger.clone(),
+                        peers,
+                    };
+                    self.broadcast(message).await;
+                }
+                Ok(None)
             }
         };
 
@@ -138,27 +169,23 @@ impl MessageHandler for Node {
 }
 
 impl Node {
-    async fn forward_to_replicas(&mut self, txid: String, command: ClientCommand) {
-        let sync_message: Bytes = bincode::serialize(&Command(txid, command)).unwrap().into();
+    async fn broadcast(&mut self, message: Message) {
+        let message: Bytes = bincode::serialize(&message).unwrap().into();
 
         // FIXME this won't be necessary when we refactor
-
         // Need to lock the shared self.peers variable, but it needs to be done in
         // its own scope to release the lock before the .await
         // See https://tokio.rs/tokio/tutorial/shared-state in section
         // "Holding a MutexGuard across an .await" for more info
-        let peers_clone;
+        let peers_vec;
         {
             let peers_lock = self.peers.lock().unwrap();
-            peers_clone = peers_lock.clone();
+            peers_vec = peers_lock.clone().into_iter().collect();
         }
 
         // forward the command to all replicas and wait for them to respond
-        info!("Forwarding set to {:?}", peers_clone.to_vec());
-        let handlers = self
-            .sender
-            .broadcast(peers_clone.to_vec(), sync_message)
-            .await;
+        info!("Forwarding set to {:?}", peers_vec);
+        let handlers = self.sender.broadcast(peers_vec, message).await;
         futures::future::join_all(handlers).await;
     }
 }

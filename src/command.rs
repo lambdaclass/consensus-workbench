@@ -7,7 +7,7 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
-#[derive(Debug, Serialize, Deserialize, Parser, Clone)]
+#[derive(Debug, Serialize, Deserialize, Parser, Clone, PartialEq, Eq)]
 #[clap()]
 pub enum Command {
     Set { key: String, value: String },

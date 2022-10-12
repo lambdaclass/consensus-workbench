@@ -1,3 +1,4 @@
+use itertools::Itertools;
 /// TODO
 /// loosely based on https://blog.logrocket.com/how-to-build-a-blockchain-in-rust/
 use lib::command::Command;
@@ -7,7 +8,7 @@ use sha2::{Digest, Sha256};
 
 const DIFFICULTY_PREFIX: &str = "00";
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Block {
     pub hash: String,
     pub previous_hash: String,
@@ -19,13 +20,29 @@ impl Block {
     // TODO rename to calculate_hash
     pub fn calculate_hash(&self) -> Vec<u8> {
         let mut hasher = Sha256::new();
-        hasher.update(self.previous_hash.to_string());
+        hasher.update(&self.previous_hash);
         hasher.update(self.nonce.to_string());
         for (txid, cmd) in &self.data {
             hasher.update(txid);
             hasher.update(cmd.to_string());
         }
         hasher.finalize().as_slice().to_owned()
+    }
+
+    pub fn genesis() -> Self {
+        // TODO using ugly placeholder values for genesis, see if there are better ones
+        let data = vec![(
+            "0000000-0000-0000-0000-000000000000".to_string(),
+            Command::Get {
+                key: "genesis".to_string(),
+            },
+        )];
+        Block {
+            previous_hash: "genesis".to_string(),
+            hash: "genesis".to_string(),
+            data,
+            nonce: 0,
+        }
     }
 }
 
@@ -37,21 +54,8 @@ pub struct Ledger {
 impl Ledger {
     /// Creates a new ledger with a genesis block in it.
     pub fn new() -> Self {
-        // TODO using ugly placeholder values for genesis, see if there are better ones
-        let data = vec![(
-            "0000000-0000-0000-0000-000000000000".to_string(),
-            Command::Get {
-                key: "genesis".to_string(),
-            },
-        )];
-        let genesis = Block {
-            previous_hash: "genesis".to_string(),
-            hash: "genesis".to_string(),
-            data,
-            nonce: 0,
-        };
         Self {
-            blocks: vec![genesis],
+            blocks: vec![Block::genesis()],
         }
     }
 
@@ -91,29 +95,36 @@ impl Ledger {
         false
     }
 
-    /// Returns true if the given block is valid candidate to extend the current chain.
-    pub fn is_valid(&self, candidate_block: &Block) -> bool {
-        // it should be safe to unwrap as there always should be a genesis block
-        let previous_block = self.blocks.last().unwrap();
-
-        // TODO make these checks more readable
-        if candidate_block.previous_hash != previous_block.hash {
-            warn!(
-                "block has wrong previous hash {}",
-                candidate_block.previous_hash
-            );
-            return false;
-        } else if !hash_to_binary_representation(
-            &hex::decode(&candidate_block.hash).expect("couldn't decode from hex"),
-        )
-        .starts_with(DIFFICULTY_PREFIX)
-        {
-            warn!("block has invalid difficulty {}", candidate_block.hash);
-            return false;
-        } else if hex::encode(candidate_block.calculate_hash()) != candidate_block.hash {
-            warn!("block has invalid hash {}", candidate_block.hash);
+    /// FIXME
+    pub fn is_valid(&self) -> bool {
+        if self.blocks.is_empty() || *self.blocks.first().unwrap() != Block::genesis() {
+            warn!("ledger has an invalid genesis block");
             return false;
         }
+
+        let mut n = 1;
+        for (previous, block) in self.blocks.iter().tuple_windows() {
+            if block.previous_hash != previous.hash {
+                warn!(
+                    "block {} has wrong previous hash {}, expected {}",
+                    n, block.previous_hash, previous.hash
+                );
+                return false;
+            } else if !hash_to_binary_representation(
+                &hex::decode(&block.hash).expect("couldn't decode from hex"),
+            )
+            .starts_with(DIFFICULTY_PREFIX)
+            {
+                warn!("block {} has invalid difficulty {}", n, block.hash);
+                return false;
+            } else if hex::encode(block.calculate_hash()) != block.hash {
+                warn!("block {} has invalid hash {}", n, block.hash);
+                return false;
+            }
+
+            n += 1;
+        }
+
         true
     }
 
