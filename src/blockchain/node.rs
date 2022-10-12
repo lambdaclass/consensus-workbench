@@ -11,7 +11,7 @@ use lib::{
 };
 use log::info;
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
+use std::{net::SocketAddr, collections::HashMap};
 use std::sync::{Arc, Mutex};
 
 use lib::command::Command as ClientCommand;
@@ -20,7 +20,7 @@ use lib::command::Command as ClientCommand;
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Message {
     /// A command sent by a a client to this node.
-    Command(ClientCommand),
+    Command(String, ClientCommand),
 
     /// A request from a peer to replicate a client write command
     Replicate(ClientCommand),
@@ -43,7 +43,9 @@ impl Message {
         // alternatively the network code could be refactored to have different tcp connections
         // and feeding both types of incoming messages into the same async handler task
         if let Ok(c) = bincode::deserialize::<ClientCommand>(&data) {
-            Ok(Self::Command(c))
+            // for now generating the uuid here, should we let the client do it?
+            let txid = uuid::Uuid::new_v4().to_string();
+            Ok(Self::Command(txid, c))
         } else {
             bincode::deserialize(&data).map_err(|e| anyhow!(e))
         }
@@ -53,12 +55,17 @@ impl Message {
 #[derive(Clone)]
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
 pub struct Node {
+    // FIXME this ark mutex shouldn't be necessary
     pub peers: Arc<Mutex<Vec<SocketAddr>>>,
     pub sender: ReliableSender,
+    pub mempool: HashMap<String, ClientCommand>,
+    pub ledger: Ledger,
 }
 
 use ClientCommand::*;
 use Message::*;
+
+use crate::ledger::Ledger;
 
 impl Node {
     pub fn new(seed: Option<SocketAddr>) -> Self {
@@ -66,6 +73,8 @@ impl Node {
         Self {
             peers: Arc::new(Mutex::new(peers)),
             sender: ReliableSender::new(),
+            mempool: HashMap::new(),
+            ledger: Ledger::new(),
         }
     }
 }
@@ -77,19 +86,27 @@ impl MessageHandler for Node {
         info!("Received request {:?}", request);
 
         let result = match request {
-            Command(Set { key, value }) => {
-                // TODO
-                Ok(())
+            Command(_, Get { key }) => Ok(self.ledger.get(&key)),
+            Command(txid, Set{value, key}) => {
+                if self.mempool.contains_key(&txid) || self.ledger.contains(&txid) {
+                    Ok(None)
+                } else {
+                    let cmd = Set{key: key.clone(), value: value.clone()};
+                    self.mempool.insert(txid.clone(), cmd.clone());
+                    self.forward_to_replicas(txid, cmd);
+
+                    // just for consistency return the value, although it's not committed
+                    Ok(Some(value))
+                }
             }
             Replicate(Set { key, value }) => {
                 // TODO
-                Ok(())
+                Ok(None)
             }
             Subscribe { address } => {
                 // TODO
-                Ok(())
+                Ok(None)
             }
-            Command(Get { key }) => Ok(()),
             _ => Err(anyhow!("Unhandled command")),
         };
 
@@ -103,8 +120,10 @@ impl MessageHandler for Node {
 }
 
 impl Node {
-    async fn forward_to_replicas(&mut self, command: ClientCommand) {
-        let sync_message: Bytes = bincode::serialize(&command).unwrap().into();
+    async fn forward_to_replicas(&mut self, txid: String, command: ClientCommand) {
+        let sync_message: Bytes = bincode::serialize(&Command(txid, command)).unwrap().into();
+
+        // FIXME this won't be necessary when we refactor
 
         // Need to lock the shared self.peers variable, but it needs to be done in
         // its own scope to release the lock before the .await

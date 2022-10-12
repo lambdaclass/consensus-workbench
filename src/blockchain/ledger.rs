@@ -6,13 +6,12 @@ use serde::{Serialize, Deserialize};
 use sha2::{Digest, Sha256};
 
 const DIFFICULTY_PREFIX: &str = "00";
-type Transaction = (String, Command);
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Block {
     pub hash: String,
     pub previous_hash: String,
-    pub data: Vec<Transaction>,
+    pub data: Vec<(String, Command)>,
     pub nonce: u64,
 }
 
@@ -30,6 +29,7 @@ impl Block {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Ledger {
     blocks: Vec<Block>
 }
@@ -71,6 +71,18 @@ impl Ledger {
         None
     }
 
+    /// Returns true if there's a transaction with the given id commited in some block of this ledger.
+    pub fn contains(&self, txid: &str) -> bool {
+        for block in self.blocks.iter().rev() {
+            for (stored_txid, _) in &block.data {
+                if stored_txid == txid {
+                    return true
+                }
+            }
+        }
+        false
+    }
+
     /// Returns true if the given block is valid candidate to extend the current chain.
     pub fn is_valid(&self, candidate_block: &Block) -> bool {
         // it should be safe to unwrap as there always should be a genesis block
@@ -96,9 +108,8 @@ impl Ledger {
         true
     }
 
-
     /// TODO
-    pub fn mine(&self, transactions: Vec<Transaction>) -> Block {
+    pub fn mine(&self, transactions: Vec<(String, Command)>) -> Block {
         // TODO this will have to run on a cancellable async task
         //
 
