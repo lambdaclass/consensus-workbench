@@ -21,7 +21,7 @@ struct Cli {
     address: IpAddr,
     /// if running as a replica, this is the address of the primary
     #[clap(long, value_parser, value_name = "ADDR")]
-    primary: Option<SocketAddr>,
+    seed: Option<SocketAddr>,
     /// Store name, useful to have several nodes in same machine.
     #[clap(short, long)]
     db_name: Option<String>,
@@ -40,35 +40,7 @@ async fn main() {
         .unwrap();
 
     let address = SocketAddr::new(cli.address, cli.port);
-
-    let node = if let Some(primary_address) = cli.primary {
-        info!(
-            "Replica: Running as replica on {}, waiting for commands from the primary node...",
-            address
-        );
-
-        cli.primary
-            .is_some()
-            .then(|| info!("Subscribing to primary: {}.", primary_address));
-
-        // TODO: this "Subscribe" message is sent here for testing purposes.
-        //       But it shouldn't be here. We should have an initialization loop
-        //       inside the actual replica node to handle the response, deal with
-        //       errors, and eventually reconnect to a new primary.
-        let mut sender = SimpleSender::new();
-        let subscribe_message: Bytes = bincode::serialize(&Message::Subscribe { address })
-            .unwrap()
-            .into();
-        sender.send(primary_address, subscribe_message).await;
-
-        let db_name = db_name(cli.db_name.unwrap_or("replica".to_string()));
-        Node::backup(&db_name)
-    } else {
-        info!("Primary: Running as primary on {}.", address);
-
-        let db_name = db_name(cli.db_name.unwrap_or("primary".to_string()));
-        Node::primary(&db_name)
-    };
+    let node = Node::new(cli.seed);
     Receiver::spawn(address, node).await.unwrap();
 }
 

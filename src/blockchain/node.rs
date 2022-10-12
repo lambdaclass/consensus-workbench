@@ -53,38 +53,18 @@ impl Message {
 #[derive(Clone)]
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
 pub struct Node {
-    pub state: State,
-    pub store: Store,
     pub peers: Arc<Mutex<Vec<SocketAddr>>>,
     pub sender: ReliableSender,
 }
 
-/// The state of a node viewed as a state-machine.
-#[derive(Clone, Copy)]
-pub enum State {
-    Primary,
-    Backup,
-}
-
 use ClientCommand::*;
 use Message::*;
-use State::*;
 
 impl Node {
-    pub fn primary(db_path: &str) -> Self {
+    pub fn new(seed: Option<SocketAddr>) -> Self {
+        let peers = seed.map(|s| vec![s]).unwrap_or_default();
         Self {
-            state: Primary,
-            store: Store::new(db_path).unwrap(),
-            peers: Arc::new(Mutex::new(vec![])),
-            sender: ReliableSender::new(),
-        }
-    }
-
-    pub fn backup(db_path: &str) -> Self {
-        Self {
-            state: Backup,
-            store: Store::new(db_path).unwrap(),
-            peers: Arc::new(Mutex::new(vec![])),
+            peers: Arc::new(Mutex::new(peers)),
             sender: ReliableSender::new(),
         }
     }
@@ -96,32 +76,20 @@ impl MessageHandler for Node {
         let request = Message::deserialize(bytes)?;
         info!("Received request {:?}", request);
 
-        let result = match (self.state, request) {
-            (Primary, Command(Set { key, value })) => {
-                self.forward_to_replicas(Set {
-                    key: key.clone(),
-                    value: value.clone(),
-                })
-                .await;
-                self.store
-                    .write(key.clone().into(), value.clone().into())
-                    .await
+        let result = match request {
+            Command(Set { key, value }) => {
+                // TODO
+                Ok(())
             }
-            (Backup, Replicate(Set { key, value })) => {
-                self.forward_to_replicas(Set {
-                    key: key.clone(),
-                    value: value.clone(),
-                })
-                .await;
-                self.store.write(key.into(), value.into()).await
+            Replicate(Set { key, value }) => {
+                // TODO
+                Ok(())
             }
-            (_, Subscribe { address }) => {
-                let mut peers = self.peers.lock().unwrap();
-                peers.push(address);
-                info!("Peers: {:?}", peers);
-                Ok(None)
+            Subscribe { address } => {
+                // TODO
+                Ok(())
             }
-            (_, Command(Get { key })) => self.store.read(key.clone().into()).await,
+            Command(Get { key }) => Ok(()),
             _ => Err(anyhow!("Unhandled command")),
         };
 
