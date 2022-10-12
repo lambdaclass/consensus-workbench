@@ -40,7 +40,7 @@ async fn main() {
         .unwrap();
 
     let address = SocketAddr::new(cli.address, cli.port);
-    let node = Node::new(cli.seed);
+    let node = Node::new(address, cli.seed);
     Receiver::spawn(address, node).await.unwrap();
 }
 

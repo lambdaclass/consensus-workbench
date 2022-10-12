@@ -5,10 +5,7 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::sink::SinkExt as _;
-use lib::{
-    network::{MessageHandler, ReliableSender, Writer},
-    store::Store,
-};
+use lib::network::{MessageHandler, ReliableSender, Writer};
 use log::info;
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, collections::HashMap};
@@ -19,18 +16,13 @@ use lib::command::Command as ClientCommand;
 /// The types of messages supported by this implementation's state machine.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Message {
-    /// A command sent by a a client to this node.
+    /// A client transaction either received directly from the client or forwarded by a peer.
     Command(String, ClientCommand),
 
-    /// A request from a peer to replicate a client write command
-    Replicate(ClientCommand),
+    /// A request from a node to its seed to get it's current ledger
+    GetState { reply_to: SocketAddr },
 
-    /// A backup replica request to subcribe to a primary
-    Subscribe { address: SocketAddr },
-
-    /// A primary node's heartbeat including the currently known peers
-    // this is just for illustration purposes not being used yet
-    Heartbeat { peers: Vec<SocketAddr> },
+    State {from: SocketAddr, peers: Vec<SocketAddr>, ledger: Ledger},
 }
 
 impl Message {
@@ -55,6 +47,7 @@ impl Message {
 #[derive(Clone)]
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
 pub struct Node {
+    pub address: SocketAddr,
     // FIXME this ark mutex shouldn't be necessary
     pub peers: Arc<Mutex<Vec<SocketAddr>>>,
     pub sender: ReliableSender,
@@ -68,9 +61,10 @@ use Message::*;
 use crate::ledger::Ledger;
 
 impl Node {
-    pub fn new(seed: Option<SocketAddr>) -> Self {
+    pub fn new(address: SocketAddr, seed: Option<SocketAddr>) -> Self {
         let peers = seed.map(|s| vec![s]).unwrap_or_default();
         Self {
+            address,
             peers: Arc::new(Mutex::new(peers)),
             sender: ReliableSender::new(),
             mempool: HashMap::new(),
@@ -85,6 +79,10 @@ impl MessageHandler for Node {
         let request = Message::deserialize(bytes)?;
         info!("Received request {:?}", request);
 
+        // FIXME there are a couple of events not yet handled in the code below because they require extra channel setup
+        // 1. On node startup -> broadcast GetLedger to current peers (which will either be [] or [seed])
+        // 2. block mining done -> add new block to ledger and broadacast Ledger message
+
         let result = match request {
             Command(_, Get { key }) => Ok(self.ledger.get(&key)),
             Command(txid, Set{value, key}) => {
@@ -93,19 +91,17 @@ impl MessageHandler for Node {
                 } else {
                     let cmd = Set{key: key.clone(), value: value.clone()};
                     self.mempool.insert(txid.clone(), cmd.clone());
-                    self.forward_to_replicas(txid, cmd);
+                    self.forward_to_replicas(txid, cmd).await;
 
                     // just for consistency return the value, although it's not committed
                     Ok(Some(value))
                 }
             }
-            Replicate(Set { key, value }) => {
-                // TODO
-                Ok(None)
+            GetState{reply_to} => {
+                todo!()
             }
-            Subscribe { address } => {
-                // TODO
-                Ok(None)
+            State{..} => {
+                todo!()
             }
             _ => Err(anyhow!("Unhandled command")),
         };
