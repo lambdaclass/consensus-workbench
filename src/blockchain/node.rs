@@ -1,15 +1,15 @@
 /// This module contains an implementation nodes that can run in primary or backup mode.
 /// Every Set command to a primary node will be broadcasted reliably for the backup nodes to replicate it.
 /// We plan to add backup promotion in case of primary failure.
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Result, Error};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::sink::SinkExt as _;
 use lib::network::{MessageHandler, ReliableSender, Writer};
 use log::info;
 use serde::{Deserialize, Serialize};
-use std::{net::SocketAddr, collections::HashMap};
 use std::sync::{Arc, Mutex};
+use std::{collections::HashMap, net::SocketAddr};
 
 use lib::command::Command as ClientCommand;
 
@@ -19,10 +19,14 @@ pub enum Message {
     /// A client transaction either received directly from the client or forwarded by a peer.
     Command(String, ClientCommand),
 
-    /// A request from a node to its seed to get it's current ledger
+    /// A request from a node to its seed to get it's current ledger.
     GetState { reply_to: SocketAddr },
 
-    State {from: SocketAddr, peers: Vec<SocketAddr>, ledger: Ledger},
+    State {
+        from: SocketAddr,
+        peers: Vec<SocketAddr>,
+        ledger: Ledger,
+    },
 }
 
 impl Message {
@@ -83,13 +87,16 @@ impl MessageHandler for Node {
         // 1. On node startup -> broadcast GetLedger to current peers (which will either be [] or [seed])
         // 2. block mining done -> add new block to ledger and broadacast Ledger message
 
-        let result = match request {
+        let result: Result<Option<String>, Error> = match request {
             Command(_, Get { key }) => Ok(self.ledger.get(&key)),
-            Command(txid, Set{value, key}) => {
+            Command(txid, Set { value, key }) => {
                 if self.mempool.contains_key(&txid) || self.ledger.contains(&txid) {
                     Ok(None)
                 } else {
-                    let cmd = Set{key: key.clone(), value: value.clone()};
+                    let cmd = Set {
+                        key: key.clone(),
+                        value: value.clone(),
+                    };
                     self.mempool.insert(txid.clone(), cmd.clone());
                     self.forward_to_replicas(txid, cmd).await;
 
@@ -97,13 +104,28 @@ impl MessageHandler for Node {
                     Ok(Some(value))
                 }
             }
-            GetState{reply_to} => {
+            GetState { reply_to } => {
+                let response;
+                {
+                    // FIXME remove locking
+                    let mut locked_peers = self.peers.lock().unwrap();
+                    if !locked_peers.contains(&reply_to) {
+                        locked_peers.push(reply_to);
+                    }
+
+                    response = State {
+                        from: self.address,
+                        ledger: self.ledger.clone(),
+                        peers: locked_peers.clone(),
+                    };
+                }
+                let response = bincode::serialize(&response)?.into();
+                self.sender.send(reply_to, response).await;
+                Ok(None)
+            }
+            State { .. } => {
                 todo!()
             }
-            State{..} => {
-                todo!()
-            }
-            _ => Err(anyhow!("Unhandled command")),
         };
 
         // convert the error into something serializable

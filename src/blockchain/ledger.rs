@@ -2,7 +2,7 @@
 /// loosely based on https://blog.logrocket.com/how-to-build-a-blockchain-in-rust/
 use lib::command::Command;
 use log::{info, warn};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const DIFFICULTY_PREFIX: &str = "00";
@@ -31,23 +31,27 @@ impl Block {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Ledger {
-    blocks: Vec<Block>
+    blocks: Vec<Block>,
 }
 
 impl Ledger {
     /// Creates a new ledger with a genesis block in it.
     pub fn new() -> Self {
         // TODO using ugly placeholder values for genesis, see if there are better ones
-        let data = vec![("0000000-0000-0000-0000-000000000000".to_string(),
-                         Command::Get { key: "genesis".to_string() })];
+        let data = vec![(
+            "0000000-0000-0000-0000-000000000000".to_string(),
+            Command::Get {
+                key: "genesis".to_string(),
+            },
+        )];
         let genesis = Block {
             previous_hash: "genesis".to_string(),
             hash: "genesis".to_string(),
             data,
-            nonce: 0
+            nonce: 0,
         };
         Self {
-            blocks: vec![genesis]
+            blocks: vec![genesis],
         }
     }
 
@@ -60,7 +64,11 @@ impl Ledger {
     pub fn get(&self, key: &str) -> Option<String> {
         for block in self.blocks.iter().rev() {
             for (_, cmd) in &block.data {
-                if let Command::Set {key: block_key, value} = cmd {
+                if let Command::Set {
+                    key: block_key,
+                    value,
+                } = cmd
+                {
                     if block_key == key {
                         return Some(value.clone());
                     }
@@ -76,7 +84,7 @@ impl Ledger {
         for block in self.blocks.iter().rev() {
             for (stored_txid, _) in &block.data {
                 if stored_txid == txid {
-                    return true
+                    return true;
                 }
             }
         }
@@ -90,18 +98,19 @@ impl Ledger {
 
         // TODO make these checks more readable
         if candidate_block.previous_hash != previous_block.hash {
-            warn!("block has wrong previous hash {}", candidate_block.previous_hash);
+            warn!(
+                "block has wrong previous hash {}",
+                candidate_block.previous_hash
+            );
             return false;
         } else if !hash_to_binary_representation(
             &hex::decode(&candidate_block.hash).expect("couldn't decode from hex"),
         )
-            .starts_with(DIFFICULTY_PREFIX)
+        .starts_with(DIFFICULTY_PREFIX)
         {
             warn!("block has invalid difficulty {}", candidate_block.hash);
             return false;
-
-        } else if hex::encode(candidate_block.calculate_hash()) != candidate_block.hash
-        {
+        } else if hex::encode(candidate_block.calculate_hash()) != candidate_block.hash {
             warn!("block has invalid hash {}", candidate_block.hash);
             return false;
         }

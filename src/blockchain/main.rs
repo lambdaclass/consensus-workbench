@@ -1,14 +1,12 @@
-use bytes::Bytes;
 use clap::Parser;
 use lib::network::Receiver;
-use lib::network::SimpleSender;
 use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use crate::node::{Message, Node};
+use crate::node::Node;
 
-mod node;
 mod ledger;
+mod node;
 
 #[derive(Parser)]
 #[clap(author, version, about)]
@@ -42,10 +40,6 @@ async fn main() {
     let address = SocketAddr::new(cli.address, cli.port);
     let node = Node::new(address, cli.seed);
     Receiver::spawn(address, node).await.unwrap();
-}
-
-fn db_name(name: String) -> String {
-    format!(".db_{}", name)
 }
 
 #[cfg(test)]
