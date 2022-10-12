@@ -13,7 +13,7 @@ done
 
 while [ $j -lt $1 ]; do
    PORT=$((6100+$j))
-   RUST_LOG=DEBUG ../../target/debug/node_lock_commit --port $PORT --peers "$LIST_PEERS" &
+   RUST_LOG=INFO ../../target/debug/node_lock_commit --port $PORT --peers "$LIST_PEERS" &
    
    j=$((j + 1))
 done
