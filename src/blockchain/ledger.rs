@@ -134,7 +134,7 @@ impl Ledger {
     pub async fn spawn_miner(
         &self,
         transactions: Vec<(String, Command)>,
-    ) -> (JoinHandle<()>, Receiver<Block>) {
+    ) -> (JoinHandle<Block>, Receiver<Block>) {
         let (sender, receiver) = oneshot::channel();
         let previous_block = self.blocks.last().unwrap().clone();
 
@@ -166,7 +166,7 @@ impl Ledger {
                 candidate.nonce += 1;
             }
         });
-        (receiver, miner_task)
+        (miner_task, receiver)
     }
 }
 

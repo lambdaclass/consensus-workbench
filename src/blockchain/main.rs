@@ -1,12 +1,18 @@
 use clap::Parser;
-use lib::network::Receiver;
+use lib::network::{Receiver as NetworkReceiver, MessageHandler, Writer};
 use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use tokio::sync::mpsc::{channel, Sender};
+use async_trait::async_trait;
+use bytes::Bytes;
+use anyhow::{anyhow, Error, Result};
 
 use crate::node::Node;
 
 mod ledger;
 mod node;
+
+pub const CHANNEL_CAPACITY: usize = 1_000;
 
 #[derive(Parser)]
 #[clap(author, version, about)]
@@ -25,6 +31,21 @@ struct Cli {
     db_name: Option<String>,
 }
 
+// TODO should this be defined here?
+#[derive(Clone)]
+struct NodeReceiverHandler {
+    network_sender: Sender<node::Message>
+}
+
+#[async_trait]
+impl MessageHandler for NodeReceiverHandler {
+    async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
+        let request = node::Message::deserialize(bytes)?;
+        self.network_sender.send(request).await;
+        Ok(())
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -38,8 +59,17 @@ async fn main() {
         .unwrap();
 
     let address = SocketAddr::new(cli.address, cli.port);
-    let node = Node::new(address, cli.seed);
-    Receiver::spawn(address, node).await.unwrap();
+
+    let (network_sender, network_receiver) = channel(CHANNEL_CAPACITY);
+
+    NetworkReceiver::spawn(
+        address,
+        NodeReceiverHandler {
+            network_sender
+        },
+    );
+
+    let node = Node::spawn(address, cli.seed, network_receiver);
 }
 
 #[cfg(test)]

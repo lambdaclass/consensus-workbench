@@ -1,17 +1,16 @@
 /// This module contains an implementation nodes that can run in primary or backup mode.
 /// Every Set command to a primary node will be broadcasted reliably for the backup nodes to replicate it.
 /// We plan to add backup promotion in case of primary failure.
-use anyhow::{anyhow, Error, Result};
-use async_trait::async_trait;
+use anyhow::{anyhow, Result};
 use bytes::Bytes;
-use futures::sink::SinkExt as _;
-use lib::network::{MessageHandler, ReliableSender, Writer};
+use lib::network::ReliableSender;
 use log::info;
 use serde::{Deserialize, Serialize};
+use tokio::sync::oneshot::Receiver as OneShotReceiver;
+use tokio::sync::mpsc::Receiver as MPSCReceiver;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::{collections::HashMap, net::SocketAddr};
-use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::task::JoinHandle;
 
 use lib::command::Command as ClientCommand;
@@ -59,8 +58,9 @@ pub struct Node {
     pub sender: ReliableSender,
     pub mempool: HashMap<String, ClientCommand>,
     pub ledger: Ledger,
-    pub miner_task: JoinHandle<()>,
-    pub miner_receiver: Receiver<Block>,
+    pub miner_task: JoinHandle<Block>,
+    pub miner_receiver: OneShotReceiver<Block>,
+    pub network_receiver: MPSCReceiver<Message>,
 }
 
 use ClientCommand::*;
@@ -69,14 +69,15 @@ use Message::*;
 use crate::ledger::{Block, Ledger};
 
 impl Node {
-    pub async fn spawn(address: SocketAddr, seed: Option<SocketAddr>) -> Self {
+    // FIXME this should spawn and start a loop
+    pub async fn spawn(address: SocketAddr, seed: Option<SocketAddr>, network_receiver: MPSCReceiver<Message>) -> Self {
         let mut peers = HashSet::new();
         if let Some(seed) = seed {
             peers.insert(seed);
         }
 
         let ledger = Ledger::new();
-        let (miner_task, miner_receiver) = ledger.spawn_miner(vec![]);
+        let (miner_task, miner_receiver) = ledger.spawn_miner(vec![]).await;
 
         Self {
             address,
@@ -86,21 +87,21 @@ impl Node {
             ledger,
             miner_task,
             miner_receiver,
+            network_receiver
         }
     }
 }
 
-#[async_trait]
-impl MessageHandler for Node {
-    async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
-        let request = Message::deserialize(bytes)?;
-        info!("Received request {:?}", request);
+impl Node {
+    // FIXME rename and start in spawning
+    async fn handle(&mut self, message: Message) -> Result<Option<String>> {
+        info!("Received request {:?}", message);
 
         // FIXME there are a couple of events not yet handled in the code below because they require extra channel setup
         // 1. On node startup -> broadcast GetLedger to current peers (which will either be [] or [seed])
         // 2. block mining done -> add new block to ledger and broadacast Ledger message
 
-        let result: Result<Option<String>, Error> = match request {
+        match message {
             Command(_, Get { key }) => Ok(self.ledger.get(&key)),
             Command(txid, Set { value, key }) => {
                 if self.mempool.contains_key(&txid) || self.ledger.contains(&txid) {
@@ -165,18 +166,10 @@ impl MessageHandler for Node {
                 }
                 Ok(None)
             }
-        };
+        }
 
-        // convert the error into something serializable
-        let result = result.map_err(|e| e.to_string());
-
-        info!("Sending response {:?}", result);
-        let reply = bincode::serialize(&result)?;
-        Ok(writer.send(reply.into()).await?)
     }
-}
 
-impl Node {
     async fn broadcast(&mut self, message: Message) {
         let message: Bytes = bincode::serialize(&message).unwrap().into();
 
