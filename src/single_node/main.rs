@@ -7,7 +7,7 @@ use clap::Parser;
 use futures::sink::SinkExt as _;
 use lib::{
     network::{MessageHandler, Receiver, Writer},
-    store::Store,
+    store::Store, command::Command,
 };
 use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -34,16 +34,16 @@ struct Node {
 #[async_trait]
 impl MessageHandler for Node {
     async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
-        let request = bincode::deserialize(&bytes)?;
+        let request: Command = bincode::deserialize(&bytes)?;
         info!("Received request {:?}", request);
 
         let result = match request {
-            ClientCommand::Set { key, value } => {
+            Command::Client(ClientCommand::Set { key, value }) => {
                 self.store
                     .write(key.clone().into(), value.clone().into())
                     .await
             }
-            ClientCommand::Get { key } => self.store.read(key.clone().into()).await,
+            Command::Client(ClientCommand::Get { key }) => self.store.read(key.clone().into()).await,
             _ => Err(anyhow!("Unhandled command")),
         };
 

@@ -63,7 +63,6 @@ impl ClientCommand {
         let reply_handler = sender.send(address, message).await;
 
         let response = reply_handler.await?;
-        info!("debug {:?}", response);
         let response: Result<Option<String>, String> = bincode::deserialize(&response)?;
         response.map_err(|e| anyhow!(e))
     }

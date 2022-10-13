@@ -173,13 +173,5 @@ mod tests {
         .unwrap();
         assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
-
-        let reply = ClientCommand::Set {
-            key: "k3".to_string(),
-            value: "_".to_string(),
-        }
-        .send_to("0.0.0.0:231".parse().unwrap())
-        .await;
-        assert!(reply.is_err());
     }
 }
