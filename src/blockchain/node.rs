@@ -94,14 +94,19 @@ impl Node {
         };
 
         tokio::spawn(async move {
-            // FIXME On node startup -> broadcast GetLedger to current peers (which will either be [] or [seed])
+            // ask the seeds for their current state to catch up with the ledger and learn about peers
+            let startup_message = GetState {
+                reply_to: node.address,
+            };
+            node.broadcast(startup_message).await;
 
             loop {
                 // tokio select from both channels
                 tokio::select! {
                     block = node.miner_receiver.recv() => {
                         if let Some(block) = block {
-                            node.handle_block(block).await;
+                            let new_ledger = node.ledger.extend(block).unwrap();
+                            node.update_ledger(new_ledger).await;
                         }
                     }
                     message = node.network_receiver.recv() => {
@@ -117,12 +122,6 @@ impl Node {
 }
 
 impl Node {
-    async fn handle_block(&mut self, block: Block) {
-        // if a block that this same node mined is invalid then something is bad, crash
-        let new_ledger = self.ledger.extend(block).unwrap();
-        self.update_ledger(new_ledger).await;
-    }
-
     // FIXME do we really need this to be a result? what do we do with the error?
     async fn handle_message(&mut self, message: Message) -> Result<Option<String>> {
         info!("Received request {:?}", message);
@@ -181,6 +180,7 @@ impl Node {
     }
 
     /// TODO
+    // FIXME this is a weird function, only added it to avoid duplication but there should be a better separation
     async fn update_ledger(&mut self, ledger: Ledger) {
         self.ledger = ledger;
 
