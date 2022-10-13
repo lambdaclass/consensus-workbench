@@ -7,7 +7,6 @@ use lib::network::ReliableSender;
 use log::info;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
 use std::{collections::HashMap, net::SocketAddr};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::task::JoinHandle;
@@ -56,7 +55,7 @@ pub struct Node {
     pub sender: ReliableSender,
     pub mempool: HashMap<String, ClientCommand>,
     pub ledger: Ledger,
-    pub miner_task: JoinHandle<Block>,
+    pub miner_task: JoinHandle<()>,
     pub miner_receiver: Receiver<Block>,
     pub miner_sender: Sender<Block>,
     pub network_receiver: Receiver<Message>,
@@ -95,6 +94,8 @@ impl Node {
         };
 
         tokio::spawn(async move {
+            // FIXME On node startup -> broadcast GetLedger to current peers (which will either be [] or [seed])
+
             loop {
                 // tokio select from both channels
                 tokio::select! {
@@ -116,15 +117,15 @@ impl Node {
 }
 
 impl Node {
-    async fn handle_block(&mut self, block: Block) {}
+    async fn handle_block(&mut self, block: Block) {
+        // if a block that this same node mined is invalid then something is bad, crash
+        let new_ledger = self.ledger.extend(block).unwrap();
+        self.update_ledger(new_ledger).await;
+    }
 
     // FIXME do we really need this to be a result? what do we do with the error?
     async fn handle_message(&mut self, message: Message) -> Result<Option<String>> {
         info!("Received request {:?}", message);
-
-        // FIXME there are a couple of events not yet handled in the code below because they require extra channel setup
-        // 1. On node startup -> broadcast GetLedger to current peers (which will either be [] or [seed])
-        // 2. block mining done -> add new block to ledger and broadacast Ledger message
 
         match message {
             Command(_, Get { key }) => Ok(self.ledger.get(&key)),
@@ -172,26 +173,35 @@ impl Node {
                 // if the received chain is longer, prefer it and broadcast it
                 // otherwise ignore
                 if ledger.is_valid() && ledger.length() > self.ledger.length() {
-                    self.ledger = ledger;
-
-                    // since the ledger changed, the current miner task extending the old one is invalid
-                    // so we abort it and restart mining based on the latest ledger
-                    self.miner_task.abort();
-                    let mempool = self.mempool.clone().into_iter().collect();
-                    self.miner_task = self.ledger.spawn_miner(mempool, self.miner_sender.clone()).await;
-
-                    let message = State {
-                        from,
-                        ledger: self.ledger.clone(),
-                        peers,
-                    };
-                    self.broadcast(message).await;
+                    self.update_ledger(ledger).await;
                 }
                 Ok(None)
             }
         }
     }
 
+    /// TODO
+    async fn update_ledger(&mut self, ledger: Ledger) {
+        self.ledger = ledger;
+
+        // since the ledger changed, the current miner task extending the old one is invalid
+        // so we abort it and restart mining based on the latest ledger
+        self.miner_task.abort();
+        let mempool = self.mempool.clone().into_iter().collect();
+        self.miner_task = self
+            .ledger
+            .spawn_miner(mempool, self.miner_sender.clone())
+            .await;
+
+        let message = State {
+            from: self.address,
+            ledger: self.ledger.clone(),
+            peers: self.peers.clone(),
+        };
+        self.broadcast(message).await;
+    }
+
+    /// TODO
     async fn broadcast(&mut self, message: Message) {
         let message: Bytes = bincode::serialize(&message).unwrap().into();
         let peers_vec = self.peers.clone().into_iter().collect();

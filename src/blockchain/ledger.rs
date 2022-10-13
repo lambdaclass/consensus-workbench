@@ -1,3 +1,4 @@
+use anyhow::{bail, Result};
 use itertools::Itertools;
 /// TODO
 /// loosely based on https://blog.logrocket.com/how-to-build-a-blockchain-in-rust/
@@ -45,6 +46,27 @@ impl Block {
             data,
             nonce: 0,
         }
+    }
+
+    fn is_valid_extension_of(&self, other: &Block) -> bool {
+        if self.previous_hash != other.hash {
+            warn!(
+                "block has wrong previous hash {}, expected {}",
+                self.previous_hash, other.hash
+            );
+            return false;
+        } else if !hash_to_binary_representation(
+            &hex::decode(&self.hash).expect("couldn't decode from hex"),
+        )
+        .starts_with(DIFFICULTY_PREFIX)
+        {
+            warn!("block has invalid difficulty {}", self.hash);
+            return false;
+        } else if hex::encode(self.calculate_hash()) != self.hash {
+            warn!("block has invalid hash {}", self.hash);
+            return false;
+        }
+        true
     }
 }
 
@@ -106,21 +128,7 @@ impl Ledger {
 
         let mut n = 1;
         for (previous, block) in self.blocks.iter().tuple_windows() {
-            if block.previous_hash != previous.hash {
-                warn!(
-                    "block {} has wrong previous hash {}, expected {}",
-                    n, block.previous_hash, previous.hash
-                );
-                return false;
-            } else if !hash_to_binary_representation(
-                &hex::decode(&block.hash).expect("couldn't decode from hex"),
-            )
-            .starts_with(DIFFICULTY_PREFIX)
-            {
-                warn!("block {} has invalid difficulty {}", n, block.hash);
-                return false;
-            } else if hex::encode(block.calculate_hash()) != block.hash {
-                warn!("block {} has invalid hash {}", n, block.hash);
+            if !block.is_valid_extension_of(previous) {
                 return false;
             }
 
@@ -130,12 +138,24 @@ impl Ledger {
         true
     }
 
+    /// FIXME
+    pub fn extend(&mut self, block: Block) -> Result<Self> {
+        if !block.is_valid_extension_of(&self.blocks.last().unwrap()) {
+            bail!("block {:?} is not a valid extension of the ledger", block);
+        }
+        let mut new_ledger = self.clone();
+        new_ledger.blocks.push(block);
+        Ok(new_ledger)
+    }
+
     /// TODO
+    // FIXME it's probably better for ledger to only run the mining loop and leave the async boilerplate
+    // to the node that calls it
     pub async fn spawn_miner(
         &self,
         transactions: Vec<(String, Command)>,
         sender: Sender<Block>,
-    ) -> JoinHandle<Block> {
+    ) -> JoinHandle<()> {
         let previous_block = self.blocks.last().unwrap().clone();
 
         tokio::spawn(async move {
@@ -161,7 +181,9 @@ impl Ledger {
                         hex::encode(&candidate.hash),
                         binary_hash
                     );
-                    return candidate;
+
+                    sender.send(candidate);
+                    return;
                 }
                 candidate.nonce += 1;
             }
