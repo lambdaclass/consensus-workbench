@@ -174,7 +174,11 @@ impl Node {
                 if ledger.is_valid() && ledger.length() > self.ledger.length() {
                     self.ledger = ledger;
 
-                    // FIXME restart mining with new latest block
+                    // since the ledger changed, the current miner task extending the old one is invalid
+                    // so we abort it and restart mining based on the latest ledger
+                    self.miner_task.abort();
+                    let mempool = self.mempool.clone().into_iter().collect();
+                    self.miner_task = self.ledger.spawn_miner(mempool, self.miner_sender.clone()).await;
 
                     let message = State {
                         from,
