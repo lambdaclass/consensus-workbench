@@ -5,6 +5,8 @@ use lib::command::Command;
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tokio::sync::oneshot::{self, Receiver};
+use tokio::task::JoinHandle;
 
 const DIFFICULTY_PREFIX: &str = "00";
 
@@ -129,38 +131,42 @@ impl Ledger {
     }
 
     /// TODO
-    pub fn mine(&self, transactions: Vec<(String, Command)>) -> Block {
-        // TODO this will have to run on a cancellable async task
-        //
-
+    pub async fn spawn_miner(
+        &self,
+        transactions: Vec<(String, Command)>,
+    ) -> (JoinHandle<()>, Receiver<Block>) {
+        let (sender, receiver) = oneshot::channel();
         let previous_block = self.blocks.last().unwrap().clone();
 
-        info!("mining block...");
-        let mut candidate = Block {
-            previous_hash: previous_block.hash,
-            hash: "not known yet".to_string(),
-            data: transactions,
-            nonce: 0,
-        };
+        let miner_task = tokio::spawn(async move {
+            info!("mining block...");
+            let mut candidate = Block {
+                previous_hash: previous_block.hash,
+                hash: "not known yet".to_string(),
+                data: transactions,
+                nonce: 0,
+            };
 
-        loop {
-            if candidate.nonce % 100000 == 0 {
-                info!("nonce: {}", candidate.nonce);
+            loop {
+                if candidate.nonce % 100000 == 0 {
+                    info!("nonce: {}", candidate.nonce);
+                }
+                let hash = candidate.calculate_hash();
+                candidate.hash = hex::encode(&hash);
+                let binary_hash = hash_to_binary_representation(&hash);
+                if binary_hash.starts_with(DIFFICULTY_PREFIX) {
+                    info!(
+                        "mined! nonce: {}, hash: {}, binary hash: {}",
+                        candidate.nonce,
+                        hex::encode(&candidate.hash),
+                        binary_hash
+                    );
+                    return candidate;
+                }
+                candidate.nonce += 1;
             }
-            let hash = candidate.calculate_hash();
-            candidate.hash = hex::encode(&hash);
-            let binary_hash = hash_to_binary_representation(&hash);
-            if binary_hash.starts_with(DIFFICULTY_PREFIX) {
-                info!(
-                    "mined! nonce: {}, hash: {}, binary hash: {}",
-                    candidate.nonce,
-                    hex::encode(&candidate.hash),
-                    binary_hash
-                );
-                return candidate;
-            }
-            candidate.nonce += 1;
-        }
+        });
+        (receiver, miner_task)
     }
 }
 

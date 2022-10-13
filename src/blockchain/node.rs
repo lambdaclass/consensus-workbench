@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::{collections::HashMap, net::SocketAddr};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::task::JoinHandle;
 
 use lib::command::Command as ClientCommand;
 
@@ -49,7 +51,6 @@ impl Message {
     }
 }
 
-#[derive(Clone)]
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
 pub struct Node {
     pub address: SocketAddr,
@@ -58,26 +59,33 @@ pub struct Node {
     pub sender: ReliableSender,
     pub mempool: HashMap<String, ClientCommand>,
     pub ledger: Ledger,
+    pub miner_task: JoinHandle<()>,
+    pub miner_receiver: Receiver<Block>,
 }
 
 use ClientCommand::*;
 use Message::*;
 
-use crate::ledger::Ledger;
+use crate::ledger::{Block, Ledger};
 
 impl Node {
-    pub fn new(address: SocketAddr, seed: Option<SocketAddr>) -> Self {
+    pub async fn spawn(address: SocketAddr, seed: Option<SocketAddr>) -> Self {
         let mut peers = HashSet::new();
         if let Some(seed) = seed {
             peers.insert(seed);
         }
+
+        let ledger = Ledger::new();
+        let (miner_task, miner_receiver) = ledger.spawn_miner(vec![]);
 
         Self {
             address,
             peers: Arc::new(Mutex::new(peers)),
             sender: ReliableSender::new(),
             mempool: HashMap::new(),
-            ledger: Ledger::new(),
+            ledger,
+            miner_task,
+            miner_receiver,
         }
     }
 }
