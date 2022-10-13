@@ -52,8 +52,7 @@ impl Message {
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
 pub struct Node {
     pub address: SocketAddr,
-    // FIXME this arc mutex shouldn't be necessary
-    pub peers: Arc<Mutex<HashSet<SocketAddr>>>,
+    pub peers: HashSet<SocketAddr>,
     pub sender: ReliableSender,
     pub mempool: HashMap<String, ClientCommand>,
     pub ledger: Ledger,
@@ -85,7 +84,7 @@ impl Node {
 
         let mut node = Self {
             address,
-            peers: Arc::new(Mutex::new(peers)),
+            peers,
             sender: ReliableSender::new(),
             mempool: HashMap::new(),
             ledger,
@@ -106,7 +105,8 @@ impl Node {
                     }
                     message = node.network_receiver.recv() => {
                         if let Some(message) = message {
-                            node.handle_message(message).await;
+                            // FIXME the result should be returned to the the client sending the message
+                            let _result = node.handle_message(message).await;
                         }
                     }
                 }
@@ -146,20 +146,17 @@ impl Node {
                 }
             }
             GetState { reply_to } => {
-                let response;
-                {
-                    // save the peer if later user
-                    // FIXME remove locking
-                    let mut locked_peers = self.peers.lock().unwrap();
-                    locked_peers.insert(reply_to);
+                // save the peer if later user
+                self.peers.insert(reply_to);
 
-                    response = State {
-                        from: self.address,
-                        ledger: self.ledger.clone(),
-                        peers: locked_peers.clone(),
-                    };
-                }
-                let response = bincode::serialize(&response)?.into();
+                let response = State {
+                    from: self.address,
+                    ledger: self.ledger.clone(),
+                    peers: self.peers.clone(),
+                };
+
+                // FIXME log error and continue on error instead of unwrapping
+                let response = bincode::serialize(&response).unwrap().into();
                 self.sender.send(reply_to, response).await;
                 Ok(None)
             }
@@ -168,13 +165,9 @@ impl Node {
                 ledger,
                 peers,
             } => {
-                {
-                    // learn about new peers
-                    // FIXME remove locking
-                    let mut locked_peers = self.peers.lock().unwrap();
-                    locked_peers.insert(from);
-                    locked_peers.extend(&peers);
-                }
+                // learn about new peers
+                self.peers.insert(from);
+                self.peers.extend(&peers);
 
                 // if the received chain is longer, prefer it and broadcast it
                 // otherwise ignore
@@ -197,17 +190,7 @@ impl Node {
 
     async fn broadcast(&mut self, message: Message) {
         let message: Bytes = bincode::serialize(&message).unwrap().into();
-
-        // FIXME this won't be necessary when we refactor
-        // Need to lock the shared self.peers variable, but it needs to be done in
-        // its own scope to release the lock before the .await
-        // See https://tokio.rs/tokio/tutorial/shared-state in section
-        // "Holding a MutexGuard across an .await" for more info
-        let peers_vec;
-        {
-            let peers_lock = self.peers.lock().unwrap();
-            peers_vec = peers_lock.clone().into_iter().collect();
-        }
+        let peers_vec = self.peers.clone().into_iter().collect();
 
         // forward the command to all replicas and wait for them to respond
         info!("Forwarding set to {:?}", peers_vec);
