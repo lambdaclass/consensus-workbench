@@ -2,10 +2,12 @@ use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
 use clap::Parser;
+use futures::SinkExt;
 use lib::network::{MessageHandler, Receiver as NetworkReceiver, Writer};
 use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::sync::mpsc::{channel, Sender};
+use tokio::sync::oneshot;
 
 use crate::node::Node;
 
@@ -34,15 +36,19 @@ struct Cli {
 // TODO should this be defined here?
 #[derive(Clone)]
 struct NodeReceiverHandler {
-    network_sender: Sender<node::Message>,
+    network_sender: Sender<(node::Message, oneshot::Sender<Result<Option<String>>>)>,
 }
 
 #[async_trait]
 impl MessageHandler for NodeReceiverHandler {
     async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
         let request = node::Message::deserialize(bytes)?;
-        self.network_sender.send(request).await;
-        Ok(())
+
+        let (reply_sender, reply_receiver) = oneshot::channel();
+        self.network_sender.send((request, reply_sender)).await?;
+        let reply = reply_receiver.await?.map_err(|e| e.to_string());
+        let reply = bincode::serialize(&reply)?;
+        Ok(writer.send(reply.into()).await?)
     }
 }
 

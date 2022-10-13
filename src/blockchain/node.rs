@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::{collections::HashMap, net::SocketAddr};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use lib::command::Command as ClientCommand;
@@ -58,7 +59,7 @@ pub struct Node {
     pub miner_task: JoinHandle<()>,
     pub miner_receiver: Receiver<Block>,
     pub miner_sender: Sender<Block>,
-    pub network_receiver: Receiver<Message>,
+    pub network_receiver: Receiver<(Message, oneshot::Sender<Result<Option<String>>>)>,
 }
 
 use ClientCommand::*;
@@ -70,7 +71,7 @@ impl Node {
     pub async fn spawn(
         address: SocketAddr,
         seed: Option<SocketAddr>,
-        network_receiver: Receiver<Message>,
+        network_receiver: Receiver<(Message, oneshot::Sender<Result<Option<String>>>)>,
     ) -> JoinHandle<Self> {
         let mut peers = HashSet::new();
         if let Some(seed) = seed {
@@ -110,9 +111,9 @@ impl Node {
                         }
                     }
                     message = node.network_receiver.recv() => {
-                        if let Some(message) = message {
-                            // FIXME the result should be returned to the the client sending the message
-                            let _result = node.handle_message(message).await;
+                        if let Some((message, reply_sender)) = message {
+                            let result = node.handle_message(message).await;
+                            reply_sender.send(result);
                         }
                     }
                 }
@@ -122,7 +123,6 @@ impl Node {
 }
 
 impl Node {
-    // FIXME do we really need this to be a result? what do we do with the error?
     async fn handle_message(&mut self, message: Message) -> Result<Option<String>> {
         info!("Received request {:?}", message);
 
