@@ -1,11 +1,11 @@
+use anyhow::{anyhow, Error, Result};
+use async_trait::async_trait;
+use bytes::Bytes;
 use clap::Parser;
-use lib::network::{Receiver as NetworkReceiver, MessageHandler, Writer};
+use lib::network::{MessageHandler, Receiver as NetworkReceiver, Writer};
 use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::sync::mpsc::{channel, Sender};
-use async_trait::async_trait;
-use bytes::Bytes;
-use anyhow::{anyhow, Error, Result};
 
 use crate::node::Node;
 
@@ -34,7 +34,7 @@ struct Cli {
 // TODO should this be defined here?
 #[derive(Clone)]
 struct NodeReceiverHandler {
-    network_sender: Sender<node::Message>
+    network_sender: Sender<node::Message>,
 }
 
 #[async_trait]
@@ -62,12 +62,7 @@ async fn main() {
 
     let (network_sender, network_receiver) = channel(CHANNEL_CAPACITY);
 
-    NetworkReceiver::spawn(
-        address,
-        NodeReceiverHandler {
-            network_sender
-        },
-    );
+    NetworkReceiver::spawn(address, NodeReceiverHandler { network_sender });
 
     let node = Node::spawn(address, cli.seed, network_receiver);
 }

@@ -6,11 +6,10 @@ use bytes::Bytes;
 use lib::network::ReliableSender;
 use log::info;
 use serde::{Deserialize, Serialize};
-use tokio::sync::oneshot::Receiver as OneShotReceiver;
-use tokio::sync::mpsc::Receiver as MPSCReceiver;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::{collections::HashMap, net::SocketAddr};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::task::JoinHandle;
 
 use lib::command::Command as ClientCommand;
@@ -59,8 +58,9 @@ pub struct Node {
     pub mempool: HashMap<String, ClientCommand>,
     pub ledger: Ledger,
     pub miner_task: JoinHandle<Block>,
-    pub miner_receiver: OneShotReceiver<Block>,
-    pub network_receiver: MPSCReceiver<Message>,
+    pub miner_receiver: Receiver<Block>,
+    pub miner_sender: Sender<Block>,
+    pub network_receiver: Receiver<Message>,
 }
 
 use ClientCommand::*;
@@ -69,32 +69,57 @@ use Message::*;
 use crate::ledger::{Block, Ledger};
 
 impl Node {
-    // FIXME this should spawn and start a loop
-    pub async fn spawn(address: SocketAddr, seed: Option<SocketAddr>, network_receiver: MPSCReceiver<Message>) -> Self {
+    pub async fn spawn(
+        address: SocketAddr,
+        seed: Option<SocketAddr>,
+        network_receiver: Receiver<Message>,
+    ) -> JoinHandle<Self> {
         let mut peers = HashSet::new();
         if let Some(seed) = seed {
             peers.insert(seed);
         }
 
         let ledger = Ledger::new();
-        let (miner_task, miner_receiver) = ledger.spawn_miner(vec![]).await;
+        let (miner_sender, miner_receiver) = channel(2);
+        let miner_task = ledger.spawn_miner(vec![], miner_sender.clone()).await;
 
-        Self {
+        let mut node = Self {
             address,
             peers: Arc::new(Mutex::new(peers)),
             sender: ReliableSender::new(),
             mempool: HashMap::new(),
             ledger,
             miner_task,
+            miner_sender,
             miner_receiver,
-            network_receiver
-        }
+            network_receiver,
+        };
+
+        tokio::spawn(async move {
+            loop {
+                // tokio select from both channels
+                tokio::select! {
+                    block = node.miner_receiver.recv() => {
+                        if let Some(block) = block {
+                            node.handle_block(block).await;
+                        }
+                    }
+                    message = node.network_receiver.recv() => {
+                        if let Some(message) = message {
+                            node.handle_message(message).await;
+                        }
+                    }
+                }
+            }
+        })
     }
 }
 
 impl Node {
-    // FIXME rename and start in spawning
-    async fn handle(&mut self, message: Message) -> Result<Option<String>> {
+    async fn handle_block(&mut self, block: Block) {}
+
+    // FIXME do we really need this to be a result? what do we do with the error?
+    async fn handle_message(&mut self, message: Message) -> Result<Option<String>> {
         info!("Received request {:?}", message);
 
         // FIXME there are a couple of events not yet handled in the code below because they require extra channel setup
@@ -157,6 +182,7 @@ impl Node {
                     self.ledger = ledger;
 
                     // FIXME restart mining with new latest block
+
                     let message = State {
                         from,
                         ledger: self.ledger.clone(),
@@ -167,7 +193,6 @@ impl Node {
                 Ok(None)
             }
         }
-
     }
 
     async fn broadcast(&mut self, message: Message) {

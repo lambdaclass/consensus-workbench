@@ -5,7 +5,7 @@ use lib::command::Command;
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::sync::oneshot::{self, Receiver};
+use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
 
 const DIFFICULTY_PREFIX: &str = "00";
@@ -134,11 +134,11 @@ impl Ledger {
     pub async fn spawn_miner(
         &self,
         transactions: Vec<(String, Command)>,
-    ) -> (JoinHandle<Block>, Receiver<Block>) {
-        let (sender, receiver) = oneshot::channel();
+        sender: Sender<Block>,
+    ) -> JoinHandle<Block> {
         let previous_block = self.blocks.last().unwrap().clone();
 
-        let miner_task = tokio::spawn(async move {
+        tokio::spawn(async move {
             info!("mining block...");
             let mut candidate = Block {
                 previous_hash: previous_block.hash,
@@ -165,8 +165,7 @@ impl Ledger {
                 }
                 candidate.nonce += 1;
             }
-        });
-        (miner_task, receiver)
+        })
     }
 }
 
