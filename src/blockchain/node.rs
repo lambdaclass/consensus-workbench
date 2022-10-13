@@ -113,7 +113,7 @@ impl Node {
                     message = node.network_receiver.recv() => {
                         if let Some((message, reply_sender)) = message {
                             let result = node.handle_message(message).await;
-                            reply_sender.send(result);
+                            let _ = reply_sender.send(result);
                         }
                     }
                 }

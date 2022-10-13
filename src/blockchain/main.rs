@@ -70,7 +70,7 @@ async fn main() {
 
     NetworkReceiver::spawn(address, NodeReceiverHandler { network_sender });
 
-    let node = Node::spawn(address, cli.seed, network_receiver);
+    Node::spawn(address, cli.seed, network_receiver).await;
 }
 
 #[cfg(test)]

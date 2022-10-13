@@ -126,13 +126,10 @@ impl Ledger {
             return false;
         }
 
-        let mut n = 1;
         for (previous, block) in self.blocks.iter().tuple_windows() {
             if !block.is_valid_extension_of(previous) {
                 return false;
             }
-
-            n += 1;
         }
 
         true
@@ -140,7 +137,7 @@ impl Ledger {
 
     /// FIXME
     pub fn extend(&mut self, block: Block) -> Result<Self> {
-        if !block.is_valid_extension_of(&self.blocks.last().unwrap()) {
+        if !block.is_valid_extension_of(self.blocks.last().unwrap()) {
             bail!("block {:?} is not a valid extension of the ledger", block);
         }
         let mut new_ledger = self.clone();
@@ -182,7 +179,7 @@ impl Ledger {
                         binary_hash
                     );
 
-                    sender.send(candidate);
+                    let _ = sender.send(candidate).await;
                     return;
                 }
                 candidate.nonce += 1;
