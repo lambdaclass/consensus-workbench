@@ -178,9 +178,7 @@ impl Ledger {
                 if binary_hash.starts_with(DIFFICULTY_PREFIX) {
                     info!(
                         "mined! nonce: {}, hash: {}, binary hash: {}",
-                        candidate.nonce,
-                        candidate.hash,
-                        binary_hash
+                        candidate.nonce, candidate.hash, binary_hash
                     );
 
                     // TODO log error in this case?

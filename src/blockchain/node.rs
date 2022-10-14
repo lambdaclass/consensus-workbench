@@ -3,7 +3,7 @@
 /// We plan to add backup promotion in case of primary failure.
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
-use lib::network::ReliableSender;
+use lib::network::SimpleSender;
 use log::info;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -53,7 +53,7 @@ impl Message {
 pub struct Node {
     pub address: SocketAddr,
     pub peers: HashSet<SocketAddr>,
-    pub sender: ReliableSender,
+    pub sender: SimpleSender,
     pub mempool: HashMap<String, ClientCommand>,
     pub ledger: Ledger,
     pub miner_task: JoinHandle<()>,
@@ -85,7 +85,7 @@ impl Node {
         let mut node = Self {
             address,
             peers,
-            sender: ReliableSender::new(),
+            sender: SimpleSender::new(),
             mempool: HashMap::new(),
             ledger,
             miner_task,
@@ -107,8 +107,11 @@ impl Node {
                     block = node.miner_receiver.recv() => {
                         info!("Received block: {:?}", block);
                         if let Some(block) = block {
-                            let new_ledger = node.ledger.extend(block).unwrap();
-                            node.update_ledger(new_ledger).await;
+                            // even if we explicitly reset the miner when the ledger is updated, it could happen that
+                            // a message is waiting in the channel from a now obsolete block
+                            if let Ok(new_ledger) = node.ledger.extend(block) {
+                                node.update_ledger(new_ledger).await;
+                            };
                         }
                     }
                     message = node.network_receiver.recv() => {
@@ -175,7 +178,10 @@ impl Node {
                 // if the received chain is longer, prefer it and broadcast it
                 // otherwise ignore
                 if ledger.is_valid() && ledger.length() > self.ledger.length() {
-                    info!("Received a longer ledger from {}, replacing the local one", from);
+                    info!(
+                        "Received a longer ledger from {}, replacing the local one",
+                        from
+                    );
                     self.update_ledger(ledger).await;
                 }
                 Ok(None)
@@ -215,7 +221,6 @@ impl Node {
 
         // forward the command to all replicas and wait for them to respond
         info!("Broadcasting to {:?}", peers_vec);
-        let handlers = self.sender.broadcast(peers_vec, message).await;
-        futures::future::join_all(handlers).await;
+        self.sender.broadcast(peers_vec, message).await;
     }
 }
