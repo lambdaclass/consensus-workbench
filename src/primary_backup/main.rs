@@ -107,7 +107,7 @@ mod tests {
         let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
         Receiver::spawn(
             address,
-            node::Node::primary(Vec::new(), &db_path("primary1")),
+            node::Node::primary(&db_path("primary1")),
         );
         sleep(Duration::from_millis(10)).await;
 
@@ -146,8 +146,21 @@ mod tests {
         Receiver::spawn(address_replica, node::Node::backup(&db_path("backup2")));
         Receiver::spawn(
             address_primary,
-            node::Node::primary(vec![address_replica], &db_path("primary2")),
+            node::Node::primary(&db_path("primary2")),
         );
+
+        // TODO: this "Subscribe" message is sent here for testing purposes.
+        //       But it shouldn't be here. We should have an initialization loop
+        //       inside the actual replica node to handle the response, deal with
+        //       errors, and eventually reconnect to a new primary.
+        let mut sender = SimpleSender::new();
+        let subscribe_message: Bytes = bincode::serialize(&Command::Subscribe {
+            address: address_replica,
+        })
+        .unwrap()
+        .into();
+        sender.send(address_primary, subscribe_message).await;
+
         sleep(Duration::from_millis(10)).await;
 
         // get null value
