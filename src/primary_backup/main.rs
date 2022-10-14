@@ -22,9 +22,10 @@ struct Cli {
     /// if running as a replica, this is the address of the primary
     #[clap(long, value_parser, value_name = "ADDR")]
     primary: Option<SocketAddr>,
-    /// Store name, useful to have several nodes in same machine.
+    /// Node name, useful to identify the node and the store.
+    /// (eg. when running several nodes in same machine)
     #[clap(short, long)]
-    db_name: Option<String>,
+    name: Option<String>,
 }
 
 #[tokio::main]
@@ -47,9 +48,7 @@ async fn main() {
             address
         );
 
-        cli.primary
-            .is_some()
-            .then(|| info!("Subscribing to primary: {}.", primary_address));
+        info!("Subscribing to primary: {}.", primary_address);
 
         // TODO: this "Subscribe" message is sent here for testing purposes.
         //       But it shouldn't be here. We should have an initialization loop
@@ -63,18 +62,19 @@ async fn main() {
         .into();
         sender.send(primary_address, subscribe_message).await;
 
-        let db_name = db_name(cli.db_name.unwrap_or("replica".to_string()));
-        Node::backup(&db_name)
+        Node::backup(&db_name(&cli, &format!("replic-{}", cli.port)[..]))
     } else {
         info!("Primary: Running as primary on {}.", address);
 
-        let db_name = db_name(cli.db_name.unwrap_or("primary".to_string()));
+        let db_name = db_name(&cli, "primary");
         Node::primary(&db_name)
     };
     Receiver::spawn(address, node).await.unwrap();
 }
 
-fn db_name(name: String) -> String {
+fn db_name(cli: &Cli, default: &str) -> String {
+    let default = &default.to_string();
+    let name = cli.name.as_ref().unwrap_or(default);
     format!(".db_{}", name)
 }
 
@@ -141,9 +141,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_replicated_server() {
-        fs::remove_dir_all(".db_test_primary2").unwrap_or_default();
-        fs::remove_dir_all(".db_test_backup2").unwrap_or_default();
-
         let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
         let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
         Receiver::spawn(address_replica, node::Node::backup(&db_path("backup2")));
