@@ -4,7 +4,7 @@
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use lib::network::SimpleSender;
-use log::info;
+use log::{error, info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::{collections::HashMap, net::SocketAddr};
@@ -102,24 +102,22 @@ impl Node {
             node.broadcast(startup_message).await;
 
             loop {
-                // TODO move pattern up
                 tokio::select! {
-                    block = node.miner_receiver.recv() => {
+                    Some(block) = node.miner_receiver.recv() => {
                         info!("Received block: {:?}", block);
-                        if let Some(block) = block {
-                            // even if we explicitly reset the miner when the ledger is updated, it could happen that
-                            // a message is waiting in the channel from a now obsolete block
-                            if let Ok(new_ledger) = node.ledger.extend(block) {
-                                node.update_ledger(new_ledger).await;
-                            };
-                        }
+                        // even if we explicitly reset the miner when the ledger is updated, it could happen that
+                        // a message is waiting in the channel from a now obsolete block
+                        if let Ok(new_ledger) = node.ledger.extend(block) {
+                            node.update_ledger(new_ledger).await;
+                        };
                     }
-                    message = node.network_receiver.recv() => {
-                        if let Some((message, reply_sender)) = message {
-                            let result = node.handle_message(message).await;
-                            // FIXME don't unwrap
-                            reply_sender.send(result).unwrap();
-                        }
+                    Some((message, reply_sender)) = node.network_receiver.recv() => {
+                        let result = node.handle_message(message).await;
+                        // FIXME don't unwrap
+                        reply_sender.send(result).unwrap();
+                    }
+                    else => {
+                        error!("node channels are closed");
                     }
                 }
             }
