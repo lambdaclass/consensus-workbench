@@ -28,9 +28,6 @@ struct Cli {
     /// if running as a replica, this is the address of the primary
     #[clap(long, value_parser, value_name = "ADDR")]
     seed: Option<SocketAddr>,
-    /// Store name, useful to have several nodes in same machine.
-    #[clap(short, long)]
-    db_name: Option<String>,
 }
 
 // TODO should this be defined here?
@@ -68,9 +65,10 @@ async fn main() {
 
     let (network_sender, network_receiver) = channel(CHANNEL_CAPACITY);
 
-    NetworkReceiver::spawn(address, NodeReceiverHandler { network_sender });
-
     Node::spawn(address, cli.seed, network_receiver).await;
+    NetworkReceiver::spawn(address, NodeReceiverHandler { network_sender })
+        .await
+        .unwrap();
 }
 
 #[cfg(test)]

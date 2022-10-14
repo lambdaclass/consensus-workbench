@@ -72,7 +72,7 @@ impl Node {
         address: SocketAddr,
         seed: Option<SocketAddr>,
         network_receiver: Receiver<(Message, oneshot::Sender<Result<Option<String>>>)>,
-    ) -> JoinHandle<Self> {
+    ) -> JoinHandle<()> {
         let mut peers = HashSet::new();
         if let Some(seed) = seed {
             peers.insert(seed);
@@ -102,9 +102,10 @@ impl Node {
             node.broadcast(startup_message).await;
 
             loop {
-                // tokio select from both channels
+                // TODO move pattern up
                 tokio::select! {
                     block = node.miner_receiver.recv() => {
+                        info!("Received block: {:?}", block);
                         if let Some(block) = block {
                             let new_ledger = node.ledger.extend(block).unwrap();
                             node.update_ledger(new_ledger).await;
@@ -113,7 +114,8 @@ impl Node {
                     message = node.network_receiver.recv() => {
                         if let Some((message, reply_sender)) = message {
                             let result = node.handle_message(message).await;
-                            let _ = reply_sender.send(result);
+                            // FIXME don't unwrap
+                            reply_sender.send(result).unwrap();
                         }
                     }
                 }

@@ -40,12 +40,15 @@ impl Block {
                 key: "genesis".to_string(),
             },
         )];
-        Block {
+        let mut block = Self {
             previous_hash: "genesis".to_string(),
-            hash: "genesis".to_string(),
+            hash: "temporary".to_string(),
             data,
             nonce: 0,
-        }
+        };
+        block.hash = hex::encode(block.calculate_hash());
+
+        block
     }
 
     fn is_valid_extension_of(&self, other: &Block) -> bool {
@@ -179,8 +182,9 @@ impl Ledger {
                         binary_hash
                     );
 
-                    let _ = sender.send(candidate).await;
-                    return;
+                    // TODO log error in this case?
+                    sender.send(candidate).await.unwrap();
+                    break;
                 }
                 candidate.nonce += 1;
             }
