@@ -3,6 +3,7 @@
 /// We plan to add backup promotion in case of primary failure.
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
+use core::fmt;
 use lib::network::SimpleSender;
 use log::{error, info};
 use serde::{Deserialize, Serialize};
@@ -127,7 +128,7 @@ impl Node {
 
 impl Node {
     async fn handle_message(&mut self, message: Message) -> Result<Option<String>> {
-        info!("Received request {:?}", message);
+        info!("Received network message {}", message);
 
         match message {
             Command(_, Get { key }) => Ok(self.ledger.get(&key)),
@@ -220,5 +221,22 @@ impl Node {
         // forward the command to all replicas and wait for them to respond
         info!("Broadcasting to {:?}", peers_vec);
         self.sender.broadcast(peers_vec, message).await;
+    }
+}
+
+impl fmt::Display for Message {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            State {
+                from,
+                peers,
+                ledger,
+            } => write!(
+                f,
+                "State {{ from: {:?}, peers: {:?}, ledger: {} }}",
+                from, peers, ledger
+            ),
+            other => write!(f, "{:?}", other),
+        }
     }
 }

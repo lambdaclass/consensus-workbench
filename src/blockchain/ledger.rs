@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use anyhow::{bail, Result};
 use itertools::Itertools;
 /// TODO
@@ -11,6 +13,8 @@ use tokio::task::JoinHandle;
 
 const DIFFICULTY_PREFIX: &str = "00";
 
+// TODO consider adding height
+// TODO consider adding miner node
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Block {
     pub hash: String,
@@ -188,6 +192,17 @@ impl Ledger {
                 candidate.nonce += 1;
             }
         })
+    }
+}
+
+impl Display for Ledger {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Ledger {{ length: {}, latest: {:?}  }}",
+            self.length(),
+            self.blocks.last().unwrap()
+        )
     }
 }
 
