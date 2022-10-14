@@ -51,6 +51,7 @@ impl Block {
         block
     }
 
+    // FIXME break this into is_valid and is_extension_of
     fn is_valid_extension_of(&self, other: &Block) -> bool {
         if self.previous_hash != other.hash {
             warn!(
@@ -178,7 +179,7 @@ impl Ledger {
                     info!(
                         "mined! nonce: {}, hash: {}, binary hash: {}",
                         candidate.nonce,
-                        hex::encode(&candidate.hash),
+                        candidate.hash,
                         binary_hash
                     );
 

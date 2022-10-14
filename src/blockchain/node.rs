@@ -170,10 +170,12 @@ impl Node {
                 // learn about new peers
                 self.peers.insert(from);
                 self.peers.extend(&peers);
+                self.peers.remove(&self.address);
 
                 // if the received chain is longer, prefer it and broadcast it
                 // otherwise ignore
                 if ledger.is_valid() && ledger.length() > self.ledger.length() {
+                    info!("Received a longer ledger from {}, replacing the local one", from);
                     self.update_ledger(ledger).await;
                 }
                 Ok(None)
@@ -186,7 +188,10 @@ impl Node {
     async fn update_ledger(&mut self, ledger: Ledger) {
         self.ledger = ledger;
 
-        // since the ledger changed, the current miner task extending the old one is invalid
+        // remove committed transactions from the mempool
+        self.mempool.retain(|k, _| !self.ledger.contains(k));
+
+        // since the ledger and the mempool changed, the current miner task extending the old one is invalid
         // so we abort it and restart mining based on the latest ledger
         self.miner_task.abort();
         let mempool = self.mempool.clone().into_iter().collect();
@@ -209,7 +214,7 @@ impl Node {
         let peers_vec = self.peers.clone().into_iter().collect();
 
         // forward the command to all replicas and wait for them to respond
-        info!("Forwarding set to {:?}", peers_vec);
+        info!("Broadcasting to {:?}", peers_vec);
         let handlers = self.sender.broadcast(peers_vec, message).await;
         futures::future::join_all(handlers).await;
     }
