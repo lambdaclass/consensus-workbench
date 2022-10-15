@@ -13,6 +13,8 @@ use tokio::task::JoinHandle;
 
 const DIFFICULTY_PREFIX: &str = "00";
 
+// TODO add type alias for txid and transaction
+
 // TODO consider adding height
 // TODO consider adding miner node
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -24,7 +26,7 @@ pub struct Block {
 }
 
 impl Block {
-    // TODO rename to calculate_hash
+    // FIXME what's the point of using vec here instead of the string only?
     pub fn calculate_hash(&self) -> Vec<u8> {
         let mut hasher = Sha256::new();
         hasher.update(&self.previous_hash);
@@ -38,12 +40,7 @@ impl Block {
 
     pub fn genesis() -> Self {
         // TODO using ugly placeholder values for genesis, see if there are better ones
-        let data = vec![(
-            "0000000-0000-0000-0000-000000000000".to_string(),
-            Command::Get {
-                key: "genesis".to_string(),
-            },
-        )];
+        let data = vec![];
         let mut block = Self {
             previous_hash: "genesis".to_string(),
             hash: "temporary".to_string(),
@@ -55,19 +52,27 @@ impl Block {
         block
     }
 
-    // FIXME break this into is_valid and is_extension_of
-    fn is_valid_extension_of(&self, other: &Block) -> bool {
+    /// TODO
+    fn extends(&self, other: &Block) -> bool {
         if self.previous_hash != other.hash {
             warn!(
                 "block has wrong previous hash {}, expected {}",
                 self.previous_hash, other.hash
             );
             return false;
-        } else if !hash_to_binary_representation(
-            &hex::decode(&self.hash).expect("couldn't decode from hex"),
-        )
-        .starts_with(DIFFICULTY_PREFIX)
-        {
+        }
+        true
+    }
+
+    /// TODO
+    fn is_valid(&self) -> bool {
+        let decoded_hash = hex::decode(&self.hash);
+        if decoded_hash.is_err() {
+            warn!("block hash couldn't be decoded from hex {}", self.hash);
+            return false;
+        }
+
+        if !hash_to_binary_representation(&decoded_hash.unwrap()).starts_with(DIFFICULTY_PREFIX) {
             warn!("block has invalid difficulty {}", self.hash);
             return false;
         } else if hex::encode(self.calculate_hash()) != self.hash {
@@ -135,7 +140,7 @@ impl Ledger {
         }
 
         for (previous, block) in self.blocks.iter().tuple_windows() {
-            if !block.is_valid_extension_of(previous) {
+            if !block.is_valid() || !block.extends(previous) {
                 return false;
             }
         }
@@ -144,8 +149,8 @@ impl Ledger {
     }
 
     /// FIXME
-    pub fn extend(&mut self, block: Block) -> Result<Self> {
-        if !block.is_valid_extension_of(self.blocks.last().unwrap()) {
+    pub fn extend(&self, block: Block) -> Result<Self> {
+        if !block.is_valid() || !block.extends(self.blocks.last().unwrap()) {
             bail!("block {:?} is not a valid extension of the ledger", block);
         }
         let mut new_ledger = self.clone();
@@ -212,4 +217,153 @@ fn hash_to_binary_representation(hash: &[u8]) -> String {
         res.push_str(&format!("{:b}", c));
     }
     res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn calculate_hash() {
+        // test that each of the block attributes contributes to the hash
+        // (not the hash value itself)
+        let mut block = Block {
+            hash: "temporary hash".to_string(),
+            previous_hash: Block::genesis().hash,
+            data: vec![],
+            nonce: 0,
+        };
+        let hash1 = block.calculate_hash();
+        let hash2 = block.calculate_hash();
+        assert_eq!(hash1, hash2);
+
+        block.nonce = 1;
+        let hash3 = block.calculate_hash();
+        assert_ne!(hash1, hash3);
+
+        block.previous_hash = "another".to_string();
+        let hash4 = block.calculate_hash();
+        assert_ne!(hash3, hash4);
+
+        block.data = vec![(
+            "txid".to_string(),
+            Command::Set {
+                key: "k".to_string(),
+                value: "v".to_string(),
+            },
+        )];
+        let hash5 = block.calculate_hash();
+        assert_ne!(hash4, hash5);
+
+        // same command, different txid
+        block.data = vec![(
+            "txid2".to_string(),
+            Command::Set {
+                key: "k".to_string(),
+                value: "v".to_string(),
+            },
+        )];
+        let hash6 = block.calculate_hash();
+        assert_ne!(hash5, hash6);
+
+        // the block's own hash does not affect it's hash calculation
+        block.hash = "another".to_string();
+        let hash7 = block.calculate_hash();
+        assert_eq!(hash6, hash7);
+    }
+
+    #[tokio::test]
+    async fn block_validation() {
+        let genesis = Block::genesis();
+        let mut block = Block {
+            previous_hash: genesis.hash.to_string(),
+            hash: "invalid".to_string(),
+            data: vec![],
+            nonce: 919,
+        };
+
+        assert!(block.extends(&genesis));
+
+        // hash is invalid hex
+        assert!(!block.is_valid());
+
+        block.hash = hex::encode(block.calculate_hash());
+        assert!(block.is_valid());
+        assert!(block.extends(&genesis));
+
+        // hash is invalid --the current hash is based on a different nonce
+        block.nonce = 918;
+        assert!(!block.is_valid());
+
+        // hash is valid but doesn't meet proof of work
+        block.hash = hex::encode(block.calculate_hash());
+        assert!(!block.is_valid());
+    }
+
+    #[tokio::test]
+    async fn ledger_operations() {
+        let ledger = Ledger::new();
+        assert_eq!(1, ledger.length());
+        assert_eq!(Block::genesis(), *ledger.blocks.first().unwrap());
+
+        // extend with valid block
+        let block = Block {
+            previous_hash: Block::genesis().hash.to_string(),
+            hash: "00009c985d0019b01d8c0f865c32c4af76f6aa9216c361d843bfc0849598376a".to_string(),
+            data: vec![],
+            nonce: 919,
+        };
+
+        let ledger = ledger.extend(block.clone()).unwrap();
+        assert_eq!(2, ledger.length());
+
+        // fail extend on invalid block
+        assert!(ledger.extend(block).is_err());
+    }
+
+    #[tokio::test]
+    async fn ledger_validation() {
+        // a valid block that extends genesis
+        let mut block = Block {
+            previous_hash: Block::genesis().hash.to_string(),
+            hash: "00009c985d0019b01d8c0f865c32c4af76f6aa9216c361d843bfc0849598376a".to_string(),
+            data: vec![],
+            nonce: 919,
+        };
+
+        let mut ledger = Ledger::new();
+        assert!(ledger.is_valid());
+        ledger.blocks.push(block.clone());
+        assert!(ledger.is_valid());
+
+        // fail if first block is valid but not genesis
+        ledger.blocks = vec![block.clone()];
+        assert!(!ledger.is_valid());
+
+        // fail if missing a genesis block
+        ledger.blocks = vec![];
+        assert!(!ledger.is_valid());
+
+        // fail if invalid extension
+        ledger.blocks = vec![Block::genesis(), block.clone(), block.clone()];
+        assert!(!ledger.is_valid());
+
+        // fail if invalid block
+        block.nonce = 0;
+        ledger.blocks = vec![Block::genesis(), block.clone()];
+        assert!(!ledger.is_valid());
+    }
+
+    #[tokio::test]
+    async fn mine_block() {
+        // TODO refactor
+        // run mining loop
+        // check result is valid block
+        // check it extends previous one
+        // check can be added to the ledger
+        // extended ledger is valid
+
+        // contains txid
+        // get key
+    }
 }
