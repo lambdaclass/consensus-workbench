@@ -338,14 +338,40 @@ mod tests {
 
     #[tokio::test]
     async fn mine_block() {
-        // TODO refactor
-        // run mining loop
-        // check result is valid block
-        // check it extends previous one
-        // check can be added to the ledger
-        // extended ledger is valid
+        let ledger = Ledger::new();
 
-        // contains txid
-        // get key
+        let genesis = ledger.blocks.first().unwrap().clone();
+        let transaction = (
+            "tx1".to_string(),
+            Command::Set {
+                key: "key".to_string(),
+                value: "value".to_string(),
+            },
+        );
+        let new_block = Ledger::mine_block(genesis.clone(), vec![transaction]);
+        assert!(new_block.is_valid());
+        assert!(new_block.extends(&genesis));
+
+        let ledger = ledger.extend(new_block.clone()).unwrap();
+        assert!(ledger.is_valid());
+        assert!(ledger.contains("tx1"));
+        assert_eq!("value", &ledger.get("key").unwrap());
+
+        // repeat
+        let transaction = (
+            "tx2".to_string(),
+            Command::Set {
+                key: "key".to_string(),
+                value: "another".to_string(),
+            },
+        );
+        let new_new_block = Ledger::mine_block(new_block.clone(), vec![transaction]);
+        assert!(new_new_block.is_valid());
+        assert!(new_new_block.extends(&new_block));
+
+        let ledger = ledger.extend(new_new_block.clone()).unwrap();
+        assert!(ledger.is_valid());
+        assert!(ledger.contains("tx2"));
+        assert_eq!("another", &ledger.get("key").unwrap());
     }
 }
