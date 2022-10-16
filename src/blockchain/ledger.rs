@@ -1,9 +1,10 @@
+/// TODO
+/// loosely based on https://blog.logrocket.com/how-to-build-a-blockchain-in-rust/
 use std::fmt::Display;
 
 use anyhow::{bail, Result};
 use itertools::Itertools;
-/// TODO
-/// loosely based on https://blog.logrocket.com/how-to-build-a-blockchain-in-rust/
+
 use lib::command::Command;
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
