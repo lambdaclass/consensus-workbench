@@ -81,7 +81,6 @@ impl Node {
 
         let ledger = Ledger::new();
         let (miner_sender, miner_receiver) = channel(2);
-        let miner_task = ledger.spawn_miner(vec![], miner_sender.clone()).await;
 
         let mut node = Self {
             address,
@@ -89,11 +88,13 @@ impl Node {
             sender: SimpleSender::new(),
             mempool: HashMap::new(),
             ledger,
-            miner_task,
+            miner_task: tokio::spawn(async {}), // temporary noop
             miner_sender,
             miner_receiver,
             network_receiver,
         };
+
+        node.restart_miner();
 
         tokio::spawn(async move {
             // ask the seeds for their current state to catch up with the ledger and learn about peers
@@ -123,6 +124,18 @@ impl Node {
                 }
             }
         })
+    }
+
+    /// TODO
+    fn restart_miner(&mut self) {
+        let previous_block = self.ledger.blocks.last().unwrap().clone();
+        let transactions = self.mempool.clone().into_iter().collect();
+        let sender = self.miner_sender.clone();
+        self.miner_task.abort();
+        self.miner_task = tokio::spawn(async move {
+            let new_block = Ledger::mine_block(previous_block, transactions);
+            sender.send(new_block).await.unwrap();
+        });
     }
 }
 
@@ -198,12 +211,7 @@ impl Node {
 
         // since the ledger and the mempool changed, the current miner task extending the old one is invalid
         // so we abort it and restart mining based on the latest ledger
-        self.miner_task.abort();
-        let mempool = self.mempool.clone().into_iter().collect();
-        self.miner_task = self
-            .ledger
-            .spawn_miner(mempool, self.miner_sender.clone())
-            .await;
+        self.restart_miner();
 
         let message = State {
             from: self.address,

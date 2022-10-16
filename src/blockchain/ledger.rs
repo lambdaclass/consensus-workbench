@@ -8,8 +8,6 @@ use lib::command::Command;
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::sync::mpsc::Sender;
-use tokio::task::JoinHandle;
 
 const DIFFICULTY_PREFIX: &str = "00";
 
@@ -85,7 +83,7 @@ impl Block {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Ledger {
-    blocks: Vec<Block>,
+    pub blocks: Vec<Block>,
 }
 
 impl Ledger {
@@ -96,6 +94,7 @@ impl Ledger {
         }
     }
 
+    // FIXME remove
     pub fn length(&self) -> usize {
         self.blocks.len()
     }
@@ -159,44 +158,32 @@ impl Ledger {
     }
 
     /// TODO
-    // FIXME it's probably better for ledger to only run the mining loop and leave the async boilerplate
-    // to the node that calls it
-    pub async fn spawn_miner(
-        &self,
-        transactions: Vec<(String, Command)>,
-        sender: Sender<Block>,
-    ) -> JoinHandle<()> {
-        let previous_block = self.blocks.last().unwrap().clone();
+    pub fn mine_block(previous_block: Block, transactions: Vec<(String, Command)>) -> Block {
+        info!("mining block...");
+        let mut candidate = Block {
+            previous_hash: previous_block.hash,
+            hash: "not known yet".to_string(),
+            data: transactions,
+            nonce: 0,
+        };
 
-        tokio::spawn(async move {
-            info!("mining block...");
-            let mut candidate = Block {
-                previous_hash: previous_block.hash,
-                hash: "not known yet".to_string(),
-                data: transactions,
-                nonce: 0,
-            };
-
-            loop {
-                if candidate.nonce % 100000 == 0 {
-                    info!("nonce: {}", candidate.nonce);
-                }
-                let hash = candidate.calculate_hash();
-                candidate.hash = hex::encode(&hash);
-                let binary_hash = hash_to_binary_representation(&hash);
-                if binary_hash.starts_with(DIFFICULTY_PREFIX) {
-                    info!(
-                        "mined! nonce: {}, hash: {}, binary hash: {}",
-                        candidate.nonce, candidate.hash, binary_hash
-                    );
-
-                    // TODO log error in this case?
-                    sender.send(candidate).await.unwrap();
-                    break;
-                }
-                candidate.nonce += 1;
+        loop {
+            if candidate.nonce % 100000 == 0 {
+                info!("nonce: {}", candidate.nonce);
             }
-        })
+            let hash = candidate.calculate_hash();
+            candidate.hash = hex::encode(&hash);
+            let binary_hash = hash_to_binary_representation(&hash);
+            if binary_hash.starts_with(DIFFICULTY_PREFIX) {
+                info!(
+                    "mined! nonce: {}, hash: {}, binary hash: {}",
+                    candidate.nonce, candidate.hash, binary_hash
+                );
+
+                return candidate;
+            }
+            candidate.nonce += 1;
+        }
     }
 }
 
