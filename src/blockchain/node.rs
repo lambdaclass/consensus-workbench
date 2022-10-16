@@ -135,6 +135,7 @@ impl Node {
             Command(_, Get { key }) => Ok(self.ledger.get(&key)),
             Command(txid, Set { value, key }) => {
                 if self.mempool.contains_key(&txid) || self.ledger.contains(&txid) {
+                    // TODO consider this case in tests
                     Ok(None)
                 } else {
                     let cmd = Set {
@@ -189,11 +190,15 @@ impl Node {
         }
     }
 
-    /// TODO
-    // FIXME this is a weird function, only added it to avoid duplication but there should be a better separation
+    /// Replaces the node's local ledger with the given one and applies side-effects of this update:
+    ///   - clear committed transactions from the mempool
+    ///   - restarts the miner to consider the new latest block and list of transactions
+    ///   - broadcast the new ledger state to propagate the changes (and increasing the chances of
+    ///     this version of the chain to become accepted by the network).
     async fn update_ledger(&mut self, ledger: Ledger) {
         self.ledger = ledger;
 
+        // TODO this should be tested
         // remove committed transactions from the mempool
         self.mempool.retain(|k, _| !self.ledger.contains(k));
 

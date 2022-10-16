@@ -170,6 +170,8 @@ impl Ledger {
             nonce: 0,
         };
 
+        // TODO should this check that there aren't any duplicated transactions?
+
         loop {
             if candidate.nonce % 100000 == 0 {
                 info!("nonce: {}", candidate.nonce);
