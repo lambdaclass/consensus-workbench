@@ -189,7 +189,7 @@ impl Node {
 
                 // if the received chain is longer, prefer it and broadcast it
                 // otherwise ignore
-                if ledger.is_valid() && ledger.length() > self.ledger.length() {
+                if ledger.is_valid() && ledger.blocks.len() > self.ledger.blocks.len() {
                     info!(
                         "Received a longer ledger from {}, replacing the local one",
                         from

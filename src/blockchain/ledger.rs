@@ -94,11 +94,6 @@ impl Ledger {
         }
     }
 
-    // FIXME remove
-    pub fn length(&self) -> usize {
-        self.blocks.len()
-    }
-
     /// Viewing the ledger as the commit log of key/value commands, return the current value
     /// of the given key.i
     pub fn get(&self, key: &str) -> Option<String> {
@@ -192,7 +187,7 @@ impl Display for Ledger {
         write!(
             f,
             "Ledger {{ length: {}, latest: {:?}  }}",
-            self.length(),
+            self.blocks.len(),
             self.blocks.last().unwrap()
         )
     }
@@ -290,7 +285,7 @@ mod tests {
     #[tokio::test]
     async fn ledger_operations() {
         let ledger = Ledger::new();
-        assert_eq!(1, ledger.length());
+        assert_eq!(1, ledger.blocks.len());
         assert_eq!(Block::genesis(), *ledger.blocks.first().unwrap());
 
         // extend with valid block
@@ -302,7 +297,7 @@ mod tests {
         };
 
         let ledger = ledger.extend(block.clone()).unwrap();
-        assert_eq!(2, ledger.length());
+        assert_eq!(2, ledger.blocks.len());
 
         // fail extend on invalid block
         assert!(ledger.extend(block).is_err());
