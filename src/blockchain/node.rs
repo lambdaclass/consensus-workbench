@@ -1,6 +1,4 @@
-/// This module contains an implementation nodes that can run in primary or backup mode.
-/// Every Set command to a primary node will be broadcasted reliably for the backup nodes to replicate it.
-/// We plan to add backup promotion in case of primary failure.
+/// TODO
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use core::fmt;
@@ -24,6 +22,7 @@ pub enum Message {
     /// A request from a node to its seed to get it's current ledger.
     GetState { reply_to: SocketAddr },
 
+    /// TODO
     State {
         from: SocketAddr,
         peers: HashSet<SocketAddr>,
@@ -50,8 +49,9 @@ impl Message {
     }
 }
 
-/// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
+/// FIXME
 pub struct Node {
+    // FIXME add docs to each field
     pub address: SocketAddr,
     pub peers: HashSet<SocketAddr>,
     pub sender: SimpleSender,
@@ -69,6 +69,7 @@ use Message::*;
 use crate::ledger::{Block, Ledger};
 
 impl Node {
+    /// TODO
     pub async fn spawn(
         address: SocketAddr,
         seed: Option<SocketAddr>,
@@ -127,19 +128,6 @@ impl Node {
     }
 
     /// TODO
-    fn restart_miner(&mut self) {
-        let previous_block = self.ledger.blocks.last().unwrap().clone();
-        let transactions = self.mempool.clone().into_iter().collect();
-        let sender = self.miner_sender.clone();
-        self.miner_task.abort();
-        self.miner_task = tokio::spawn(async move {
-            let new_block = Ledger::mine_block(previous_block, transactions);
-            sender.send(new_block).await.unwrap();
-        });
-    }
-}
-
-impl Node {
     async fn handle_message(&mut self, message: Message) -> Result<Option<String>> {
         info!("Received network message {}", message);
 
@@ -219,6 +207,18 @@ impl Node {
             peers: self.peers.clone(),
         };
         self.broadcast(message).await;
+    }
+
+    /// TODO
+    fn restart_miner(&mut self) {
+        let previous_block = self.ledger.blocks.last().unwrap().clone();
+        let transactions = self.mempool.clone().into_iter().collect();
+        let sender = self.miner_sender.clone();
+        self.miner_task.abort();
+        self.miner_task = tokio::spawn(async move {
+            let new_block = Ledger::mine_block(previous_block, transactions);
+            sender.send(new_block).await.unwrap();
+        });
     }
 
     /// TODO
