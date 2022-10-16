@@ -26,6 +26,7 @@ pub struct Block {
 
 impl Block {
     // FIXME what's the point of using vec here instead of the string only?
+    /// TODO
     pub fn calculate_hash(&self) -> Vec<u8> {
         let mut hasher = Sha256::new();
         hasher.update(&self.previous_hash);
@@ -37,8 +38,9 @@ impl Block {
         hasher.finalize().as_slice().to_owned()
     }
 
+    /// Create a genesis block, which is expected to be the first block of any valid ledger.
     pub fn genesis() -> Self {
-        // TODO using ugly placeholder values for genesis, see if there are better ones
+        // using ugly placeholder values for genesis, maybe there are better ones
         let data = vec![];
         let mut block = Self {
             previous_hash: "genesis".to_string(),
@@ -51,19 +53,8 @@ impl Block {
         block
     }
 
-    /// TODO
-    fn extends(&self, other: &Block) -> bool {
-        if self.previous_hash != other.hash {
-            warn!(
-                "block has wrong previous hash {}, expected {}",
-                self.previous_hash, other.hash
-            );
-            return false;
-        }
-        true
-    }
-
-    /// TODO
+    /// Returns if this is a valid node: if its hash attribute matches the result of hashing the block data
+    /// and meets the difficulty prefix (the amount of leading zeros) for the proof of work.
     fn is_valid(&self) -> bool {
         let decoded_hash = hex::decode(&self.hash);
         if decoded_hash.is_err() {
@@ -76,6 +67,18 @@ impl Block {
             return false;
         } else if hex::encode(self.calculate_hash()) != self.hash {
             warn!("block has invalid hash {}", self.hash);
+            return false;
+        }
+        true
+    }
+
+    /// Returns true if the given block is an extension of this one.
+    fn extends(&self, other: &Block) -> bool {
+        if self.previous_hash != other.hash {
+            warn!(
+                "block has wrong previous hash {}, expected {}",
+                self.previous_hash, other.hash
+            );
             return false;
         }
         true
@@ -96,7 +99,7 @@ impl Ledger {
     }
 
     /// Viewing the ledger as the commit log of key/value commands, return the current value
-    /// of the given key.i
+    /// of the given key.
     pub fn get(&self, key: &str) -> Option<String> {
         for block in self.blocks.iter().rev() {
             for (_, cmd) in &block.data {
@@ -127,7 +130,8 @@ impl Ledger {
         false
     }
 
-    /// FIXME
+    /// Return whether this blockchain is valid: it starts with the expected genesis block and
+    /// each subsequent block is a valid extensions of the previous.
     pub fn is_valid(&self) -> bool {
         if self.blocks.is_empty() || *self.blocks.first().unwrap() != Block::genesis() {
             warn!("ledger has an invalid genesis block");
@@ -143,7 +147,8 @@ impl Ledger {
         true
     }
 
-    /// FIXME
+    /// Return a new ledger that is the same as the current one with the given block added at the top.
+    /// Fails if the block is an invalid extension of this ledger.
     pub fn extend(&self, block: Block) -> Result<Self> {
         if !block.is_valid() || !block.extends(self.blocks.last().unwrap()) {
             bail!("block {:?} is not a valid extension of the ledger", block);
@@ -153,7 +158,9 @@ impl Ledger {
         Ok(new_ledger)
     }
 
-    /// TODO
+    /// Produce a block that extends the given one and includes the given list of transactions as its
+    /// data, by trying different nonce values until the hash of the block meets the difficulty prefix
+    /// --- the amount of leading zeros in the hash that is the proof of work.
     pub fn mine_block(previous_block: Block, transactions: Vec<(String, Command)>) -> Block {
         info!("mining block...");
         let mut candidate = Block {
