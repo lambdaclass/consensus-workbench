@@ -65,7 +65,11 @@ async fn main() {
 
     let (network_sender, network_receiver) = channel(CHANNEL_CAPACITY);
 
-    Node::spawn(address, cli.seed, network_receiver).await;
+    let mut node = Node::new(address, cli.seed);
+    tokio::spawn(async move {
+        node.run(network_receiver).await;
+    });
+
     NetworkReceiver::spawn(address, NodeReceiverHandler { network_sender })
         .await
         .unwrap();

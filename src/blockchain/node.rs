@@ -55,13 +55,12 @@ pub struct Node {
     // FIXME add docs to each field
     pub address: SocketAddr,
     pub peers: HashSet<SocketAddr>,
-    pub sender: SimpleSender,
-    pub mempool: HashMap<String, ClientCommand>,
-    pub ledger: Ledger,
-    pub miner_task: JoinHandle<()>,
-    pub miner_receiver: Receiver<Block>,
-    pub miner_sender: Sender<Block>,
-    pub network_receiver: Receiver<(Message, oneshot::Sender<Result<Option<String>>>)>,
+    sender: SimpleSender,
+    mempool: HashMap<String, ClientCommand>,
+    ledger: Ledger,
+    miner_task: JoinHandle<()>,
+    miner_sender: Sender<Block>,
+    miner_receiver: Receiver<Block>,
 }
 
 use ClientCommand::*;
@@ -70,71 +69,76 @@ use Message::*;
 use crate::ledger::{Block, Ledger};
 
 impl Node {
-    /// TODO
-    pub async fn spawn(
-        address: SocketAddr,
-        seed: Option<SocketAddr>,
-        network_receiver: Receiver<(Message, oneshot::Sender<Result<Option<String>>>)>,
-    ) -> JoinHandle<()> {
+    /// Initialize the node attributes. It doesn't run it nor starts mining.
+    pub fn new(address: SocketAddr, seed: Option<SocketAddr>) -> Self {
         let mut peers = HashSet::new();
         if let Some(seed) = seed {
             peers.insert(seed);
         }
 
-        let ledger = Ledger::new();
         let (miner_sender, miner_receiver) = channel(2);
 
-        let mut node = Self {
+        Self {
             address,
             peers,
             sender: SimpleSender::new(),
             mempool: HashMap::new(),
-            ledger,
-            miner_task: tokio::spawn(async {}), // temporary noop
+            ledger: Ledger::new(),
+            miner_task: tokio::spawn(async {}), // noop default
             miner_sender,
             miner_receiver,
-            network_receiver,
-        };
-
-        node.restart_miner();
-
-        tokio::spawn(async move {
-            // ask the seeds for their current state to catch up with the ledger and learn about peers
-            let startup_message = GetState {
-                reply_to: node.address,
-            };
-            node.broadcast(startup_message).await;
-
-            loop {
-                tokio::select! {
-                    Some(block) = node.miner_receiver.recv() => {
-                        info!("Received block: {:?}", block);
-                        // even if we explicitly reset the miner when the ledger is updated, it could happen that
-                        // a message is waiting in the channel from a now obsolete block
-                        if let Ok(new_ledger) = node.ledger.extend(block) {
-                            node.update_ledger(new_ledger).await;
-                        };
-                    }
-                    Some((message, reply_sender)) = node.network_receiver.recv() => {
-                        let result = node.handle_message(message.clone()).await;
-                        if let Err(error) = reply_sender.send(result) {
-                            error!("failed to send message {:?} response {:?}", message, error);
-                        };
-                    }
-                    else => {
-                        error!("node channels are closed");
-                    }
-                }
-            }
-        })
+        }
     }
 
-    /// TODO
+    /// Runs the node to process network messages incoming in the given receiver and starts a mining
+    /// task to produce blocks to extend the node's ledger.
+    pub async fn run(
+        &mut self,
+        mut network_receiver: Receiver<(Message, oneshot::Sender<Result<Option<String>>>)>,
+    ) -> JoinHandle<()> {
+        self.restart_miner();
+
+        // ask the seeds for their current state to catch up with the ledger and learn about peers
+        let startup_message = GetState {
+            reply_to: self.address,
+        };
+        self.broadcast(startup_message).await;
+
+        loop {
+            tokio::select! {
+                Some(block) = self.miner_receiver.recv() => {
+                    info!("Received block: {:?}", block);
+                    // even if we explicitly reset the miner when the ledger is updated, it could happen that
+                    // a message is waiting in the channel from a now obsolete block
+                    if let Ok(new_ledger) = self.ledger.extend(block) {
+                        self.update_ledger(new_ledger).await;
+                    };
+                }
+                Some((message, reply_sender)) = network_receiver.recv() => {
+                    let result = self.handle_message(message.clone()).await;
+                    if let Err(error) = reply_sender.send(result) {
+                        error!("failed to send message {:?} response {:?}", message, error);
+                    };
+                }
+                else => {
+                    error!("node channels are closed");
+                }
+            }
+        }
+    }
+
+    /// This function is the core of the node's behavior. It process messages coming both from clients
+    /// and peers, updates the local state and broadcasts updates.
     async fn handle_message(&mut self, message: Message) -> Result<Option<String>> {
         info!("Received network message {}", message);
 
         match message {
+            // When a client read request is received, just read the local ledger and send a response
             Command(_, Get { key }) => Ok(self.ledger.get(&key)),
+
+            // When a client write request is received, it needs to be added to the local mempool (so it's included
+            // in future blocks mined in this node) and broadcast to the network (so all the nodes eventually know about
+            // the transaction and any winning chain includes it).
             Command(txid, Set { value, key }) => {
                 if self.mempool.contains_key(&txid) || self.ledger.contains(&txid) {
                     // TODO consider this case in tests
@@ -153,6 +157,8 @@ impl Node {
                     Ok(Some(value))
                 }
             }
+
+            // When a peer requests for this node state, respond directly to it
             GetState { reply_to } => {
                 // save the peer if later user
                 self.peers.insert(reply_to);
@@ -163,9 +169,9 @@ impl Node {
                     peers: self.peers.clone(),
                 };
 
-                // FIXME log error and continue on error instead of unwrapping
-                let response = bincode::serialize(&response).unwrap().into();
-                self.sender.send(reply_to, response).await;
+                if let Some(data) = serialize(&response) {
+                    self.sender.send(reply_to, data).await;
+                }
                 Ok(None)
             }
             State {
@@ -230,12 +236,13 @@ impl Node {
 
     /// TODO
     async fn broadcast(&mut self, message: Message) {
-        let message: Bytes = bincode::serialize(&message).unwrap().into();
-        let peers_vec = self.peers.clone().into_iter().collect();
+        if let Some(data) = serialize(&message) {
+            let peers_vec = self.peers.clone().into_iter().collect();
 
-        // forward the command to all replicas and wait for them to respond
-        info!("Broadcasting to {:?}", peers_vec);
-        self.sender.broadcast(peers_vec, message).await;
+            // forward the command to all replicas and wait for them to respond
+            info!("Broadcasting to {:?}", peers_vec);
+            self.sender.broadcast(peers_vec, data).await;
+        }
     }
 }
 
@@ -252,6 +259,17 @@ impl fmt::Display for Message {
                 from, peers, ledger
             ),
             other => write!(f, "{:?}", other),
+        }
+    }
+}
+
+/// Safe serialization helper. Logs on error.
+fn serialize<T: Serialize + fmt::Debug>(message: &T) -> Option<Bytes> {
+    match bincode::serialize(message) {
+        Ok(data) => Some(data.into()),
+        Err(err) => {
+            error!("failed to serialize message {:?}, error: {}", message, err);
+            None
         }
     }
 }
