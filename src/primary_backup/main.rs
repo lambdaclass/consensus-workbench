@@ -1,10 +1,10 @@
+use bytes::Bytes;
 use clap::Parser;
+use lib::command::Command;
 use lib::network::Receiver;
+use lib::network::SimpleSender;
 use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use lib::command::Command;
-use bytes::Bytes;
-use lib::network::SimpleSender;
 
 use crate::node::Node;
 
@@ -55,11 +55,9 @@ async fn main() {
         //       inside the actual replica node to handle the response, deal with
         //       errors, and eventually reconnect to a new primary.
         let mut sender = SimpleSender::new();
-        let subscribe_message: Bytes = bincode::serialize(&Command::Subscribe {
-            address,
-        })
-        .unwrap()
-        .into();
+        let subscribe_message: Bytes = bincode::serialize(&Command::Subscribe { address })
+            .unwrap()
+            .into();
         sender.send(primary_address, subscribe_message).await;
 
         Node::backup(&db_name(&cli, &format!("replic-{}", cli.port)[..]))
@@ -105,10 +103,7 @@ mod tests {
     #[tokio::test]
     async fn test_only_primary_server() {
         let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
-        Receiver::spawn(
-            address,
-            node::Node::primary(&db_path("primary1")),
-        );
+        Receiver::spawn(address, node::Node::primary(&db_path("primary1")));
         sleep(Duration::from_millis(10)).await;
 
         let reply = Command::Get {
@@ -144,10 +139,7 @@ mod tests {
         let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
         let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
         Receiver::spawn(address_replica, node::Node::backup(&db_path("backup2")));
-        Receiver::spawn(
-            address_primary,
-            node::Node::primary(&db_path("primary2")),
-        );
+        Receiver::spawn(address_primary, node::Node::primary(&db_path("primary2")));
 
         // TODO: this "Subscribe" message is sent here for testing purposes.
         //       But it shouldn't be here. We should have an initialization loop
