@@ -85,4 +85,32 @@ mod tests {
             .init()
             .unwrap();
     }
+
+    #[tokio::test]
+    async fn single_node() {
+        // spawn node
+        // get k -> null
+        // set k=v -> eventually v
+    }
+
+    #[tokio::test]
+    async fn multiple_nodes() {
+        // spawn node 1
+        // spawn node 2
+        // spawn node 3
+        // get k -> null
+        // set k=v -> eventually v in 1
+        // eventually v in 2
+        // eventually v in 3
+
+        // set k=v2 (another node) -> eventually v2 in 1
+        // eventually v2 in 2
+        // eventually v2 in 3
+    }
+
+    #[tokio::test]
+    async fn new_node_catch_up() {}
+
+    #[tokio::test]
+    async fn node_crash_recover() {}
 }

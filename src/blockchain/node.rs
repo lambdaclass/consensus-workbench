@@ -14,7 +14,7 @@ use tokio::task::JoinHandle;
 use lib::command::Command as ClientCommand;
 
 /// The types of messages supported by this implementation's state machine.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Message {
     /// A client transaction either received directly from the client or forwarded by a peer.
     Command(String, ClientCommand),
@@ -23,6 +23,7 @@ pub enum Message {
     GetState { reply_to: SocketAddr },
 
     /// TODO
+    // FIXME should this include mempool?
     State {
         from: SocketAddr,
         peers: HashSet<SocketAddr>,
@@ -115,9 +116,10 @@ impl Node {
                         };
                     }
                     Some((message, reply_sender)) = node.network_receiver.recv() => {
-                        let result = node.handle_message(message).await;
-                        // FIXME don't unwrap
-                        reply_sender.send(result).unwrap();
+                        let result = node.handle_message(message.clone()).await;
+                        if let Err(error) = reply_sender.send(result) {
+                            error!("failed to send message {:?} response {:?}", message, error);
+                        };
                     }
                     else => {
                         error!("node channels are closed");
@@ -251,5 +253,24 @@ impl fmt::Display for Message {
             ),
             other => write!(f, "{:?}", other),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn set_command() {
+        // if already in ledger ignore
+        // if already in mempool ignore
+        // else add to mempool
+    }
+
+    async fn state() {
+        // if ledger is shorter ignore
+        // if ledger is valid and longer replace current one
+        // transactions are removed from mempool
+        // if ledger is invalid ignore
     }
 }
