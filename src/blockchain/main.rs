@@ -49,7 +49,7 @@ impl MessageHandler for NodeReceiverHandler {
     }
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 async fn main() {
     let cli = Cli::parse();
 
@@ -78,6 +78,9 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lib::command::Command;
+    use tokio_retry::strategy::FixedInterval;
+    use tokio_retry::Retry;
 
     // since logger is meant to be initialized once and tests run in parallel,
     // run this before anything because otherwise it errors out
@@ -90,11 +93,53 @@ mod tests {
             .unwrap();
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn single_node() {
-        // spawn node
-        // get k -> null
-        // set k=v -> eventually v
+        // FIXME too much duplication (also with main) try to extract to a function
+        let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
+        let (network_sender, network_receiver) = channel(CHANNEL_CAPACITY);
+        NetworkReceiver::spawn(address, NodeReceiverHandler { network_sender });
+
+        tokio::spawn(async move {
+            let mut node = Node::new(address, None);
+            node.run(network_receiver).await;
+        });
+
+        // get k1 -> null
+        let reply = Command::Get {
+            key: "k1".to_string(),
+        }
+        .send_to(address)
+        .await
+        .unwrap();
+        assert!(reply.is_none());
+
+        // set k1
+        let reply = Command::Set {
+            key: "k1".to_string(),
+            value: "v1".to_string(),
+        }
+        .send_to(address)
+        .await
+        .unwrap();
+        assert!(reply.is_some());
+        assert_eq!("v1".to_string(), reply.unwrap());
+
+        // eventually value gets into a block and get k1 -> v1
+        let retries = FixedInterval::from_millis(100).take(100);
+        let reply = Retry::spawn(retries, || async {
+            let reply = Command::Get {
+                key: "k1".to_string(),
+            }
+            .send_to(address)
+            .await
+            .unwrap();
+            reply.ok_or(())
+        })
+        .await;
+
+        assert!(reply.is_ok());
+        assert_eq!("v1".to_string(), reply.unwrap());
     }
 
     #[tokio::test]

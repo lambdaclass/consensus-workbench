@@ -109,7 +109,7 @@ impl Node {
                 Some(block) = self.miner_receiver.recv() => {
                     info!("Received block: {:?}", block);
                     // even if we explicitly reset the miner when the ledger is updated, it could happen that
-                    // a message is waiting in the channel from a now obsolete block
+                    // a message is x``waiting in the channel from a now obsolete block
                     if let Ok(new_ledger) = self.ledger.extend(block) {
                         self.update_ledger(new_ledger).await;
                     };
@@ -230,7 +230,9 @@ impl Node {
         self.miner_task.abort();
         self.miner_task = tokio::spawn(async move {
             let new_block = Ledger::mine_block(previous_block, transactions);
-            sender.send(new_block).await.unwrap();
+            if let Err(err) = sender.send(new_block).await {
+                error!("error sending mined block {}", err);
+            }
         });
     }
 
@@ -285,6 +287,7 @@ mod tests {
         // else add to mempool
     }
 
+    #[tokio::test]
     async fn state() {
         // if ledger is shorter ignore
         // if ledger is valid and longer replace current one

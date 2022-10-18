@@ -28,7 +28,7 @@ path = "src/blockchain/main.rs"
 
 
 [dependencies]
-tokio = { version = "1.5.0", features = ["rt", "net", "sync", "macros", "time", "rt-multi-thread"] }
+tokio = { version = "1.15.0", features = ["full", "tracing"] }
 tokio-util = { version = "0.7.3", features = ["codec"] }
 thiserror = "1.0.24"
 bytes = "1.0.1"
@@ -49,3 +49,4 @@ itertools = "0.10.5"
 
 [dev-dependencies]
 ctor = "0.1.23"
+tokio-retry = "0.3.0"
