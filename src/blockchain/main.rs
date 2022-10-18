@@ -8,6 +8,7 @@ use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::sync::mpsc::{channel, Sender};
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 
 use crate::node::Node;
 
@@ -68,24 +69,30 @@ async fn main() {
 
 // TODO consider renaming
 // TODO add doc
-async fn init_node(address: SocketAddr, seed: Option<SocketAddr>) {
+async fn init_node(
+    address: SocketAddr,
+    seed: Option<SocketAddr>,
+) -> (JoinHandle<()>, JoinHandle<()>) {
     let (network_sender, network_receiver) = channel(CHANNEL_CAPACITY);
 
-    tokio::spawn(async move {
+    let network_handle = tokio::spawn(async move {
         let mut node = Node::new(address, seed);
         node.run(network_receiver).await;
     });
 
-    tokio::spawn(async move {
+    let node_handler = tokio::spawn(async move {
         let receiver = NetworkReceiver::new(address, NodeReceiverHandler { network_sender });
         receiver.run().await;
     });
+
+    (network_handle, node_handler)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use lib::command::Command;
+    use log::error;
     use tokio_retry::strategy::FixedInterval;
     use tokio_retry::Retry;
 
@@ -126,40 +133,127 @@ mod tests {
         assert_eq!("v1".to_string(), reply.unwrap());
 
         // eventually value gets into a block and get k1 -> v1
+        assert_eventually_equals(address, "k1", "v1").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn multiple_nodes() {
+        let address1: SocketAddr = "127.0.0.1:6279".parse().unwrap();
+        let address2: SocketAddr = "127.0.0.1:6289".parse().unwrap();
+        let address3: SocketAddr = "127.0.0.1:6299".parse().unwrap();
+        init_node(address1, None).await;
+        init_node(address2, Some(address1)).await;
+        init_node(address3, Some(address1)).await;
+
+        Command::Set {
+            key: "k1".to_string(),
+            value: "v1".to_string(),
+        }
+        .send_to(address1)
+        .await
+        .unwrap();
+
+        // eventually value gets into a block and get k1 -> v1 (in all nodes)
+        assert_eventually_equals(address1, "k1", "v1").await;
+        assert_eventually_equals(address2, "k1", "v1").await;
+        assert_eventually_equals(address3, "k1", "v1").await;
+
+        // set k=v2 (another node) -> eventually v2 in 1
+        Command::Set {
+            key: "k1".to_string(),
+            value: "v2".to_string(),
+        }
+        .send_to(address1)
+        .await
+        .unwrap();
+        assert_eventually_equals(address1, "k1", "v2").await;
+        assert_eventually_equals(address2, "k1", "v2").await;
+        assert_eventually_equals(address3, "k1", "v2").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn new_node_catch_up() {}
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn node_crash_recover() {
+        let address1: SocketAddr = "127.0.0.1:6279".parse().unwrap();
+        let address2: SocketAddr = "127.0.0.1:6289".parse().unwrap();
+        let address3: SocketAddr = "127.0.0.1:6299".parse().unwrap();
+
+        init_node(address1, None).await;
+        // keep the handles to abort later
+        let (network_handle, node_handle) = init_node(address2, Some(address1)).await;
+        init_node(address3, Some(address1)).await;
+
+        Command::Set {
+            key: "k1".to_string(),
+            value: "v1".to_string(),
+        }
+        .send_to(address1)
+        .await
+        .unwrap();
+
+        // eventually value gets into a block and get k1 -> v1 (in all nodes)
+        assert_eventually_equals(address1, "k1", "v1").await;
+        assert_eventually_equals(address2, "k1", "v1").await;
+        assert_eventually_equals(address3, "k1", "v1").await;
+
+        // abort the 2nd node
+        network_handle.abort();
+        node_handle.abort();
+
+        // send another transaction
+        Command::Set {
+            key: "k1".to_string(),
+            value: "v2".to_string(),
+        }
+        .send_to(address1)
+        .await
+        .unwrap();
+
+        // the nodes that are still alive eventually update the value
+        assert_eventually_equals(address1, "k1", "v2").await;
+        assert_eventually_equals(address3, "k1", "v2").await;
+
+        // start the second node again
+        init_node(address2, Some(address1)).await;
+
+        // send a new transaction to the fresh right away
+        Command::Set {
+            key: "k1".to_string(),
+            value: "v3".to_string(),
+        }
+        .send_to(address2)
+        .await
+        .unwrap();
+
+        // it should receive what was the latest ledger when it started
+        assert_eventually_equals(address2, "k1", "v2").await;
+
+        // the agreed ledger should eventually include the last transaction
+        assert_eventually_equals(address1, "k1", "v3").await;
+        assert_eventually_equals(address2, "k1", "v3").await;
+        assert_eventually_equals(address3, "k1", "v3").await;
+    }
+
+    /// Send Get commands to the given address with delayed retries to give it time for a transaction
+    /// to propagate. Fails if the expected value isn't read after 20 seconds.
+    async fn assert_eventually_equals(address: SocketAddr, key: &str, value: &str) {
         let retries = FixedInterval::from_millis(100).take(200);
         let reply = Retry::spawn(retries, || async {
             let reply = Command::Get {
-                key: "k1".to_string(),
+                key: key.to_string(),
             }
             .send_to(address)
             .await
             .unwrap();
-            reply.ok_or(())
+            if reply.is_some() && reply.unwrap() == value.to_string() {
+                Ok(())
+            } else {
+                Err(())
+            }
         })
         .await;
-
         assert!(reply.is_ok());
-        assert_eq!("v1".to_string(), reply.unwrap());
     }
-
-    #[tokio::test]
-    async fn multiple_nodes() {
-        // spawn node 1
-        // spawn node 2
-        // spawn node 3
-        // get k -> null
-        // set k=v -> eventually v in 1
-        // eventually v in 2
-        // eventually v in 3
-
-        // set k=v2 (another node) -> eventually v2 in 1
-        // eventually v2 in 2
-        // eventually v2 in 3
-    }
-
-    #[tokio::test]
-    async fn new_node_catch_up() {}
-
-    #[tokio::test]
-    async fn node_crash_recover() {}
 }
