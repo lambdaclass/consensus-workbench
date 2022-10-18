@@ -1,7 +1,6 @@
 use crate::network::ReliableSender;
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
-use log::info;
 use std::fmt;
 
 use clap::Parser;
@@ -47,10 +46,14 @@ pub enum NetworkCommand {
 
     // view change
     Blame {
+        socket_addr: SocketAddr,
         view: u128,
+        timer_expired: bool
     },
     ViewChange {
+        socket_addr: SocketAddr,
         new_view: u128,
+        highest_lock: CommandView
     },
 }
 
@@ -60,6 +63,20 @@ impl ClientCommand {
         let mut sender = ReliableSender::new();
 
         let message: Bytes = bincode::serialize(&Command::Client(self))?.into();
+        let reply_handler = sender.send(address, message).await;
+
+        let response = reply_handler.await?;
+        let response: Result<Option<String>, String> = bincode::deserialize(&response)?;
+        response.map_err(|e| anyhow!(e))
+    }
+}
+
+impl NetworkCommand {
+    /// Send this command over to a server at the given address and return the response.
+    pub async fn send_to(self, address: SocketAddr) -> Result<Option<String>> {
+        let mut sender = ReliableSender::new();
+
+        let message: Bytes = bincode::serialize(&Command::Network(self))?.into();
         let reply_handler = sender.send(address, message).await;
 
         let response = reply_handler.await?;
