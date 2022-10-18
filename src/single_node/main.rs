@@ -55,7 +55,7 @@ impl MessageHandler for Node {
     }
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 async fn main() {
     let cli = Cli::parse();
 
@@ -69,7 +69,10 @@ async fn main() {
 
     let address = SocketAddr::new(cli.address, cli.port);
     let store = Store::new(".db_single_node").unwrap();
-    Receiver::spawn(address, Node { store }).await.unwrap();
+    tokio::spawn(async move {
+        let receiver = Receiver::new(address, Node { store });
+        receiver.run().await;
+    });
 }
 
 #[cfg(test)]
@@ -78,7 +81,7 @@ mod tests {
     use std::fs;
     use tokio::time::{sleep, Duration};
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_server() {
         let db_path = ".db_test";
         fs::remove_dir_all(db_path).unwrap_or_default();
@@ -91,7 +94,10 @@ mod tests {
             .unwrap();
 
         let address: SocketAddr = "127.0.0.1:6182".parse().unwrap();
-        Receiver::spawn(address, Node { store });
+        tokio::spawn(async move {
+            let receiver = Receiver::new(address, Node { store });
+            receiver.run().await;
+        });
         sleep(Duration::from_millis(10)).await;
 
         let reply = Command::Get {

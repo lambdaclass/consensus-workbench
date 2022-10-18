@@ -26,7 +26,7 @@ struct Cli {
     db_name: Option<String>,
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 async fn main() {
     let cli = Cli::parse();
 
@@ -68,7 +68,13 @@ async fn main() {
         let db_name = db_name(cli.db_name.unwrap_or("primary".to_string()));
         Node::primary(&db_name)
     };
-    Receiver::spawn(address, node).await.unwrap();
+
+    tokio::spawn(async move {
+        let receiver = Receiver::new(address, node);
+        receiver.run().await;
+    })
+    .await
+    .unwrap();
 }
 
 fn db_name(name: String) -> String {

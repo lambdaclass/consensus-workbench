@@ -8,7 +8,6 @@ use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::sync::mpsc::{channel, Sender};
 use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
 
 use crate::node::Node;
 
@@ -64,13 +63,12 @@ async fn main() {
 
     let address = SocketAddr::new(cli.address, cli.port);
 
-    // this is kind of ugly, consider refactoring receiver
-    init_node(address, cli.seed).await.await.unwrap();
+    init_node(address, cli.seed).await;
 }
 
 // TODO consider renaming
 // TODO add doc
-async fn init_node(address: SocketAddr, seed: Option<SocketAddr>) -> JoinHandle<()> {
+async fn init_node(address: SocketAddr, seed: Option<SocketAddr>) {
     let (network_sender, network_receiver) = channel(CHANNEL_CAPACITY);
 
     tokio::spawn(async move {
@@ -78,7 +76,10 @@ async fn init_node(address: SocketAddr, seed: Option<SocketAddr>) -> JoinHandle<
         node.run(network_receiver).await;
     });
 
-    NetworkReceiver::spawn(address, NodeReceiverHandler { network_sender })
+    tokio::spawn(async move {
+        let receiver = NetworkReceiver::new(address, NodeReceiverHandler { network_sender });
+        receiver.run().await;
+    });
 }
 
 #[cfg(test)]
@@ -125,7 +126,7 @@ mod tests {
         assert_eq!("v1".to_string(), reply.unwrap());
 
         // eventually value gets into a block and get k1 -> v1
-        let retries = FixedInterval::from_millis(100).take(100);
+        let retries = FixedInterval::from_millis(100).take(200);
         let reply = Retry::spawn(retries, || async {
             let reply = Command::Get {
                 key: "k1".to_string(),
