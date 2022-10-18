@@ -278,8 +278,6 @@ fn serialize<T: Serialize + fmt::Debug>(message: &T) -> Option<Bytes> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[tokio::test]
     async fn set_command() {
         // if already in ledger ignore

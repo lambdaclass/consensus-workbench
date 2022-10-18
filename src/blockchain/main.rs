@@ -8,6 +8,7 @@ use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::sync::mpsc::{channel, Sender};
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 
 use crate::node::Node;
 
@@ -63,16 +64,21 @@ async fn main() {
 
     let address = SocketAddr::new(cli.address, cli.port);
 
+    // this is kind of ugly, consider refactoring receiver
+    init_node(address, cli.seed).await.await.unwrap();
+}
+
+// TODO consider renaming
+// TODO add doc
+async fn init_node(address: SocketAddr, seed: Option<SocketAddr>) -> JoinHandle<()> {
     let (network_sender, network_receiver) = channel(CHANNEL_CAPACITY);
 
-    let mut node = Node::new(address, cli.seed);
     tokio::spawn(async move {
+        let mut node = Node::new(address, seed);
         node.run(network_receiver).await;
     });
 
     NetworkReceiver::spawn(address, NodeReceiverHandler { network_sender })
-        .await
-        .unwrap();
 }
 
 #[cfg(test)]
@@ -95,15 +101,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn single_node() {
-        // FIXME too much duplication (also with main) try to extract to a function
         let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
-        let (network_sender, network_receiver) = channel(CHANNEL_CAPACITY);
-        NetworkReceiver::spawn(address, NodeReceiverHandler { network_sender });
-
-        tokio::spawn(async move {
-            let mut node = Node::new(address, None);
-            node.run(network_receiver).await;
-        });
+        init_node(address, None).await;
 
         // get k1 -> null
         let reply = Command::Get {
