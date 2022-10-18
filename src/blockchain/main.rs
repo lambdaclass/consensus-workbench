@@ -92,7 +92,6 @@ async fn init_node(
 mod tests {
     use super::*;
     use lib::command::Command;
-    use log::error;
     use tokio_retry::strategy::FixedInterval;
     use tokio_retry::Retry;
 
@@ -163,7 +162,7 @@ mod tests {
             key: "k1".to_string(),
             value: "v2".to_string(),
         }
-        .send_to(address1)
+        .send_to(address2)
         .await
         .unwrap();
         assert_eventually_equals(address1, "k1", "v2").await;
@@ -172,13 +171,47 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn new_node_catch_up() {}
+    async fn new_node_catch_up() {
+        // start two nodes
+        let address1: SocketAddr = "127.0.0.1:6179".parse().unwrap();
+        let address2: SocketAddr = "127.0.0.1:6189".parse().unwrap();
+        init_node(address1, None).await;
+        init_node(address2, Some(address1)).await;
+
+        Command::Set {
+            key: "k1".to_string(),
+            value: "v1".to_string(),
+        }
+        .send_to(address1)
+        .await
+        .unwrap();
+
+        // eventually value gets into a block and get k1 -> v1 (in all nodes)
+        assert_eventually_equals(address1, "k1", "v1").await;
+        assert_eventually_equals(address2, "k1", "v1").await;
+
+        // set k=v2 (another node) -> eventually v2 in 1
+        Command::Set {
+            key: "k1".to_string(),
+            value: "v2".to_string(),
+        }
+        .send_to(address2)
+        .await
+        .unwrap();
+        assert_eventually_equals(address1, "k1", "v2").await;
+        assert_eventually_equals(address2, "k1", "v2").await;
+
+        // start another node, which should eventually catch up with the longest chain from its peers
+        let address3: SocketAddr = "127.0.0.1:6199".parse().unwrap();
+        init_node(address3, Some(address1)).await;
+        assert_eventually_equals(address3, "k1", "v2").await;
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn node_crash_recover() {
-        let address1: SocketAddr = "127.0.0.1:6279".parse().unwrap();
-        let address2: SocketAddr = "127.0.0.1:6289".parse().unwrap();
-        let address3: SocketAddr = "127.0.0.1:6299".parse().unwrap();
+        let address1: SocketAddr = "127.0.0.1:6579".parse().unwrap();
+        let address2: SocketAddr = "127.0.0.1:6589".parse().unwrap();
+        let address3: SocketAddr = "127.0.0.1:6599".parse().unwrap();
 
         init_node(address1, None).await;
         // keep the handles to abort later
@@ -226,9 +259,6 @@ mod tests {
         .send_to(address2)
         .await
         .unwrap();
-
-        // it should receive what was the latest ledger when it started
-        assert_eventually_equals(address2, "k1", "v2").await;
 
         // the agreed ledger should eventually include the last transaction
         assert_eventually_equals(address1, "k1", "v3").await;
