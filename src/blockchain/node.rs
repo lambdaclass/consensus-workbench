@@ -231,9 +231,10 @@ impl Node {
         let previous_block = self.ledger.blocks.last().unwrap().clone();
         let transactions = self.mempool.clone().into_iter().collect();
         let sender = self.miner_sender.clone();
+        let miner_id = self.address.to_string();
         self.miner_task.abort();
         self.miner_task = tokio::spawn(async move {
-            let new_block = Ledger::mine_block(previous_block, transactions);
+            let new_block = Ledger::mine_block(&miner_id, previous_block, transactions);
             if let Err(err) = sender.send(new_block).await {
                 error!("error sending mined block {}", err);
             }

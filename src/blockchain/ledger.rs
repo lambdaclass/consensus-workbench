@@ -15,9 +15,9 @@ const DIFFICULTY_PREFIX: &str = "0000";
 // TODO add type alias for txid and transaction
 
 // TODO consider adding height
-// TODO consider adding miner node
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Block {
+    miner_id: String,
     hash: String,
     previous_hash: String,
     data: Vec<(String, Command)>,
@@ -28,6 +28,7 @@ impl Block {
     /// TODO
     pub fn calculate_hash(&self) -> String {
         let mut hasher = Sha256::new();
+        hasher.update(&self.miner_id);
         hasher.update(&self.previous_hash);
         hasher.update(self.nonce.to_string());
         for (txid, cmd) in &self.data {
@@ -43,6 +44,7 @@ impl Block {
         // using ugly placeholder values for genesis, maybe there are better ones
         let data = vec![];
         let mut block = Self {
+            miner_id: "god".to_string(),
             previous_hash: "genesis".to_string(),
             hash: "temporary".to_string(),
             data,
@@ -159,9 +161,14 @@ impl Ledger {
     /// --- the amount of leading zeros in the hash that is the proof of work.
     /// Note that the transactions are assumed to be safe for inclusion in the block, no duplicate
     /// checks are run here.
-    pub fn mine_block(previous_block: Block, transactions: Vec<(String, Command)>) -> Block {
+    pub fn mine_block(
+        miner_id: &str,
+        previous_block: Block,
+        transactions: Vec<(String, Command)>,
+    ) -> Block {
         debug!("mining block...");
         let mut candidate = Block {
+            miner_id: miner_id.to_string(),
             previous_hash: previous_block.hash,
             hash: "not known yet".to_string(),
             data: transactions,
@@ -206,6 +213,7 @@ mod tests {
         // test that each of the block attributes contributes to the hash
         // (not the hash value itself)
         let mut block = Block {
+            miner_id: "127.0.0.1:6100".to_string(),
             hash: "temporary hash".to_string(),
             previous_hash: Block::genesis().hash,
             data: vec![],
@@ -254,10 +262,11 @@ mod tests {
     async fn block_validation() {
         let genesis = Block::genesis();
         let mut block = Block {
+            miner_id: "127.0.0.1:6100".to_string(),
             previous_hash: genesis.hash.to_string(),
             hash: "invalid".to_string(),
             data: vec![],
-            nonce: 919,
+            nonce: 43203,
         };
 
         assert!(block.extends(&genesis));
@@ -286,10 +295,11 @@ mod tests {
 
         // extend with valid block
         let block = Block {
+            miner_id: "127.0.0.1:6100".to_string(),
             previous_hash: Block::genesis().hash.to_string(),
-            hash: "00009c985d0019b01d8c0f865c32c4af76f6aa9216c361d843bfc0849598376a".to_string(),
+            hash: "000040fb7098c0c483085120f1d62c0af44f1bdac4f3e12871ee67d5037178cb".to_string(),
             data: vec![],
-            nonce: 919,
+            nonce: 43203,
         };
 
         let ledger = ledger.extend(block.clone()).unwrap();
@@ -303,10 +313,11 @@ mod tests {
     async fn ledger_validation() {
         // a valid block that extends genesis
         let mut block = Block {
+            miner_id: "127.0.0.1:6100".to_string(),
             previous_hash: Block::genesis().hash.to_string(),
-            hash: "00009c985d0019b01d8c0f865c32c4af76f6aa9216c361d843bfc0849598376a".to_string(),
+            hash: "000040fb7098c0c483085120f1d62c0af44f1bdac4f3e12871ee67d5037178cb".to_string(),
             data: vec![],
-            nonce: 919,
+            nonce: 43203,
         };
 
         let mut ledger = Ledger::new();
@@ -344,7 +355,7 @@ mod tests {
                 value: "value".to_string(),
             },
         );
-        let new_block = Ledger::mine_block(genesis.clone(), vec![transaction]);
+        let new_block = Ledger::mine_block("127.0.0.1:6100", genesis.clone(), vec![transaction]);
         assert!(new_block.is_valid());
         assert!(new_block.extends(&genesis));
 
@@ -361,7 +372,8 @@ mod tests {
                 value: "another".to_string(),
             },
         );
-        let new_new_block = Ledger::mine_block(new_block.clone(), vec![transaction]);
+        let new_new_block =
+            Ledger::mine_block("127.0.0.1:6100", new_block.clone(), vec![transaction]);
         assert!(new_new_block.is_valid());
         assert!(new_new_block.extends(&new_block));
 
