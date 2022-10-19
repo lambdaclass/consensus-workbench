@@ -161,6 +161,8 @@ impl Ledger {
     /// Produce a block that extends the given one and includes the given list of transactions as its
     /// data, by trying different nonce values until the hash of the block meets the difficulty prefix
     /// --- the amount of leading zeros in the hash that is the proof of work.
+    /// Note that the transactions are assumed to be safe for inclusion in the block, no duplicate
+    /// checks are run here.
     pub fn mine_block(previous_block: Block, transactions: Vec<(String, Command)>) -> Block {
         info!("mining block...");
         let mut candidate = Block {
@@ -169,8 +171,6 @@ impl Ledger {
             data: transactions,
             nonce: 0,
         };
-
-        // TODO should this check that there aren't any duplicated transactions?
 
         loop {
             if candidate.nonce % 100000 == 0 {
