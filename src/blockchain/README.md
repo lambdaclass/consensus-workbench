@@ -18,6 +18,7 @@ This is a simplistic implementation, with known limitations that would need to b
 - Messages are sent once per node, no acknowledge or retry is attempted.
 - New or crashed nodes start mining with an empty mempool, there's no attempt to learn currently pending transactions from other peers.
 - Reads of the store are done by scanning backwards the ledger (this could be improved by having an in-memory map of key/values)
+- The ledger is not persisted to disk. It will remain in the network as long as one node is alive.
 
 ## Example usage
 
