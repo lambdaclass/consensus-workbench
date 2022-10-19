@@ -22,8 +22,12 @@ pub enum Message {
     /// A request from a node to its seed to get it's current ledger.
     GetState { reply_to: SocketAddr },
 
-    /// TODO
-    // FIXME should this include mempool?
+    /// This is the only message to share state across nodes. It includes the list of the sender's
+    /// known peers (so it will be used to discover the network) and the sender's ledger (which will be
+    /// used both for new nodes to sync and to broadcast newly mined blocks).
+    /// Note that this is a naive implementation in that the entire ledger is passed around every time,
+    /// but that could be improved while maintaining a single message type by passing ledger segments
+    /// instead.
     State {
         from: SocketAddr,
         peers: HashSet<SocketAddr>,
@@ -175,6 +179,9 @@ impl Node {
                 }
                 Ok(None)
             }
+
+            // When receiving a peers state, check if it contains a valid, longer chain that should
+            // be preferred to the local one and broadcast.
             State {
                 from,
                 ledger,
@@ -185,8 +192,7 @@ impl Node {
                 self.peers.extend(&peers);
                 self.peers.remove(&self.address);
 
-                // if the received chain is longer, prefer it and broadcast it
-                // otherwise ignore
+                // check if the peer's ledger should be preferred
                 if ledger.is_valid() && ledger.blocks.len() > self.ledger.blocks.len() {
                     info!(
                         "Received a longer ledger from {}, replacing the local one",
