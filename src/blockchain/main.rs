@@ -46,7 +46,9 @@ async fn main() {
 
     let address = SocketAddr::new(cli.address, cli.port);
 
-    spawn_node_tasks(address, cli.seed).await;
+    let (network_handle, _) = spawn_node_tasks(address, cli.seed).await;
+
+    network_handle.await.unwrap();
 }
 
 /// Spawn the network receiver and a blockchain node with a channel to pass messages from one to the other.
