@@ -1,4 +1,5 @@
-/// TODO
+/// This module contains the definition of a node in a blockchain p2p network, where each node maintains
+/// a ledger of key/value store transactions, as well of the network messages supported between nodes.
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use core::fmt;
