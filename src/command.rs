@@ -12,6 +12,7 @@ use std::net::SocketAddr;
 pub enum Command {
     // node-generated commands (TODO: this could be part of a different enum)
     SyncSet { key: String, value: String },
+    Subscribe { address: SocketAddr },
     // user-generated commands
     Set { key: String, value: String },
     Get { key: String },

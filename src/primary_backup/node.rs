@@ -33,11 +33,11 @@ pub enum State {
 use State::*;
 
 impl Node {
-    pub fn primary(peers: Vec<SocketAddr>, db_path: &str) -> Self {
+    pub fn primary(db_path: &str) -> Self {
         Self {
             state: Primary,
             store: Store::new(db_path).unwrap(),
-            peers,
+            peers: vec![],
             sender: ReliableSender::new(),
         }
     }
@@ -60,28 +60,19 @@ impl MessageHandler for Node {
 
         let result = match (self.state, request) {
             (Primary, Command::Set { key, value }) => {
-                // TODO review: since we're always using the same serialization format,
-                // would it make sense to always handle serialization inside the networking calls?
-                let sync_message: Bytes = bincode::serialize(&Command::SyncSet {
-                    key: key.clone(),
-                    value: value.clone(),
-                })
-                .unwrap()
-                .into();
-
-                // forward the command to all replicas and wait for them to respond
-                let handlers = self
-                    .sender
-                    .broadcast(self.peers.clone(), sync_message)
-                    .await;
-                futures::future::join_all(handlers).await;
+                self.forward_to_replicas(&key, &value).await;
 
                 self.store.write(key.into(), value.into()).await
             }
             (Backup, Command::SyncSet { key, value }) => {
-                self.store
-                    .write(key.clone().into(), value.clone().into())
-                    .await
+                self.forward_to_replicas(&key, &value).await;
+
+                self.store.write(key.into(), value.into()).await
+            }
+            (_, Command::Subscribe { address }) => {
+                self.peers.push(address);
+                info!("Peers: {:?}", self.peers.to_vec());
+                Ok(None)
             }
             (_, Command::Get { key }) => self.store.read(key.clone().into()).await,
             _ => Err(anyhow!("Unhandled command")),
@@ -93,5 +84,25 @@ impl MessageHandler for Node {
         info!("Sending response {:?}", result);
         let reply = bincode::serialize(&result)?;
         Ok(writer.send(reply.into()).await?)
+    }
+}
+impl Node {
+    async fn forward_to_replicas(&mut self, key: &String, value: &String) {
+        // TODO review: since we're always using the same serialization format,
+        // would it make sense to always handle serialization inside the networking calls?
+        let sync_message: Bytes = bincode::serialize(&Command::SyncSet {
+            key: key.clone(),
+            value: value.clone(),
+        })
+        .unwrap()
+        .into();
+
+        // forward the command to all replicas and wait for them to respond
+        info!("Forwarding set to {:?}", self.peers.to_vec());
+        let handlers = self
+            .sender
+            .broadcast(self.peers.to_vec(), sync_message)
+            .await;
+        futures::future::join_all(handlers).await;
     }
 }
