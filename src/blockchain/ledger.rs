@@ -6,7 +6,7 @@ use anyhow::{bail, Result};
 use itertools::Itertools;
 
 use lib::command::Command;
-use log::{info, warn};
+use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -158,13 +158,15 @@ impl Ledger {
         Ok(new_ledger)
     }
 
+    const MINER_LOG_EVERY: u64 = 100000;
+
     /// Produce a block that extends the given one and includes the given list of transactions as its
     /// data, by trying different nonce values until the hash of the block meets the difficulty prefix
     /// --- the amount of leading zeros in the hash that is the proof of work.
     /// Note that the transactions are assumed to be safe for inclusion in the block, no duplicate
     /// checks are run here.
     pub fn mine_block(previous_block: Block, transactions: Vec<(String, Command)>) -> Block {
-        info!("mining block...");
+        debug!("mining block...");
         let mut candidate = Block {
             previous_hash: previous_block.hash,
             hash: "not known yet".to_string(),
@@ -173,14 +175,14 @@ impl Ledger {
         };
 
         loop {
-            if candidate.nonce % 100000 == 0 {
-                info!("nonce: {}", candidate.nonce);
+            if candidate.nonce % Self::MINER_LOG_EVERY == 0 {
+                debug!("nonce: {}", candidate.nonce);
             }
             let hash = candidate.calculate_hash();
             candidate.hash = hex::encode(&hash);
             let binary_hash = hash_to_binary_representation(&hash);
             if binary_hash.starts_with(DIFFICULTY_PREFIX) {
-                info!(
+                debug!(
                     "mined! nonce: {}, hash: {}, binary hash: {}",
                     candidate.nonce, candidate.hash, binary_hash
                 );
