@@ -142,7 +142,6 @@ impl Node {
             // the transaction and any winning chain includes it).
             Command(txid, Set { value, key }) => {
                 if self.mempool.contains_key(&txid) || self.ledger.contains(&txid) {
-                    // TODO consider this case in tests
                     debug!("skipping already seen transaction {}", txid);
                     Ok(None)
                 } else {
@@ -210,7 +209,6 @@ impl Node {
     async fn update_ledger(&mut self, ledger: Ledger) {
         self.ledger = ledger;
 
-        // TODO this should be tested
         // remove committed transactions from the mempool
         self.mempool.retain(|k, _| !self.ledger.contains(k));
 

@@ -25,7 +25,8 @@ pub struct Block {
 }
 
 impl Block {
-    /// TODO
+    /// Generate a hex string of a Sha256 hash for the attributes in this block.
+    /// The hash field itself doesn't affect the result.
     pub fn calculate_hash(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(&self.height.to_string());
