@@ -18,10 +18,10 @@ const DIFFICULTY_PREFIX: &str = "00";
 // TODO consider adding miner node
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Block {
-    pub hash: String,
-    pub previous_hash: String,
-    pub data: Vec<(String, Command)>,
-    pub nonce: u64,
+    hash: String,
+    previous_hash: String,
+    data: Vec<(String, Command)>,
+    nonce: u64,
 }
 
 impl Block {
