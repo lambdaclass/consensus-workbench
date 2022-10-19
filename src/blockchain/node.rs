@@ -3,7 +3,7 @@ use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use core::fmt;
 use lib::network::SimpleSender;
-use log::{error, info, debug};
+use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::{collections::HashMap, net::SocketAddr};
