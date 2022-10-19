@@ -1,6 +1,5 @@
 use bytes::Bytes;
 use clap::Parser;
-use lib::command::Command;
 use lib::network::Receiver;
 use lib::network::SimpleSender;
 use log::info;
@@ -149,7 +148,7 @@ mod tests {
         //       inside the actual replica node to handle the response, deal with
         //       errors, and eventually reconnect to a new primary.
         let mut sender = SimpleSender::new();
-        let subscribe_message: Bytes = bincode::serialize(&Command::Subscribe {
+        let subscribe_message: Bytes = bincode::serialize(&Message::Subscribe {
             address: address_replica,
         })
         .unwrap()

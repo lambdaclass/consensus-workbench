@@ -12,7 +12,6 @@ use lib::{
 use log::info;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
 
 use lib::command::Command as ClientCommand;
 
@@ -55,7 +54,7 @@ impl Message {
 pub struct Node {
     pub state: State,
     pub store: Store,
-    pub peers: Arc<Mutex<Vec<SocketAddr>>>,
+    pub peers: Vec<SocketAddr>,
     pub sender: ReliableSender,
 }
 
@@ -84,7 +83,7 @@ impl Node {
         Self {
             state: Backup,
             store: Store::new(db_path).unwrap(),
-            peers: Arc::new(Mutex::new(vec![])),
+            peers: vec![],
             sender: ReliableSender::new(),
         }
     }
@@ -116,9 +115,8 @@ impl MessageHandler for Node {
                 self.store.write(key.into(), value.into()).await
             }
             (_, Subscribe { address }) => {
-                let mut peers = self.peers.lock().unwrap();
-                peers.push(address);
-                info!("Peers: {:?}", peers);
+                self.peers.push(address);
+                info!("Peers: {:?}", self.peers);
                 Ok(None)
             }
             (_, Command(Get { key })) => self.store.read(key.clone().into()).await,
