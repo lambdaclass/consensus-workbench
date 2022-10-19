@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::sink::SinkExt as _;
 use lib::{
-    command::{self, ClientCommand, Command, CommandView},
+    command::{self, ClientCommand},
     network::{MessageHandler, ReliableSender, Writer},
     store::Store,
 };
@@ -17,7 +17,7 @@ use std::{
     net::SocketAddr,
     sync::{Arc, Mutex, RwLock}, time::Instant,
 };
-use lib::command::NetworkCommand;
+use crate::network_command::{NetworkCommand, CommandView, Command};
 
 #[derive(Clone)]
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
