@@ -46,8 +46,6 @@ pub enum State {
     Backup,
 }
 
-use ClientCommand::*;
-use Message::*;
 use State::*;
 
 #[async_trait]
@@ -223,7 +221,7 @@ impl Node {
             .unwrap()
             .into();
 
-        let other_peers = self
+        let other_peers: Vec<SocketAddr> = self
                    .peers
                    .iter()
                    .copied()

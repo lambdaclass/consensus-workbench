@@ -72,7 +72,7 @@ impl ReliableSender {
     /// cancel handlers ordered as the input `addresses` vector.
     pub async fn broadcast(
         &mut self,
-        addresses: &Vec<SocketAddr>,
+        addresses: &[SocketAddr],
         data: Bytes,
     ) -> Vec<CancelHandler> {
         let mut handlers = Vec::new();

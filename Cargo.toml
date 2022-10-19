@@ -19,6 +19,10 @@ name = "single_node"
 path = "src/single_node/main.rs"
 
 [[bin]]
+name = "node_replication"
+path = "src/primary_backup/main.rs"
+
+[[bin]]
 name = "node_lock_commit"
 path = "src/lock_commit/main.rs"
 

@@ -43,7 +43,6 @@ impl MessageHandler for Node {
                     .await
             }
             ClientCommand::Get { key } => self.store.read(key.clone().into()).await,
-            _ => Err(anyhow!("Unhandled command")),
         };
 
         // convert the error into something serializable
