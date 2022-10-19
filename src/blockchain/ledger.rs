@@ -10,7 +10,7 @@ use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const DIFFICULTY_PREFIX: &str = "00";
+const DIFFICULTY_PREFIX: &str = "0000";
 
 // TODO add type alias for txid and transaction
 
@@ -25,9 +25,8 @@ pub struct Block {
 }
 
 impl Block {
-    // FIXME what's the point of using vec here instead of the string only?
     /// TODO
-    pub fn calculate_hash(&self) -> Vec<u8> {
+    pub fn calculate_hash(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(&self.previous_hash);
         hasher.update(self.nonce.to_string());
@@ -35,7 +34,8 @@ impl Block {
             hasher.update(txid);
             hasher.update(cmd.to_string());
         }
-        hasher.finalize().as_slice().to_owned()
+        let hash = hasher.finalize().as_slice().to_owned();
+        hex::encode(hash)
     }
 
     /// Create a genesis block, which is expected to be the first block of any valid ledger.
@@ -48,7 +48,7 @@ impl Block {
             data,
             nonce: 0,
         };
-        block.hash = hex::encode(block.calculate_hash());
+        block.hash = block.calculate_hash();
 
         block
     }
@@ -56,16 +56,10 @@ impl Block {
     /// Returns if this is a valid node: if its hash attribute matches the result of hashing the block data
     /// and meets the difficulty prefix (the amount of leading zeros) for the proof of work.
     fn is_valid(&self) -> bool {
-        let decoded_hash = hex::decode(&self.hash);
-        if decoded_hash.is_err() {
-            warn!("block hash couldn't be decoded from hex {}", self.hash);
-            return false;
-        }
-
-        if !hash_to_binary_representation(&decoded_hash.unwrap()).starts_with(DIFFICULTY_PREFIX) {
+        if !self.hash.starts_with(DIFFICULTY_PREFIX) {
             warn!("block has invalid difficulty {}", self.hash);
             return false;
-        } else if hex::encode(self.calculate_hash()) != self.hash {
+        } else if self.calculate_hash() != self.hash {
             warn!("block has invalid hash {}", self.hash);
             return false;
         }
@@ -178,13 +172,11 @@ impl Ledger {
             if candidate.nonce % Self::MINER_LOG_EVERY == 0 {
                 debug!("nonce: {}", candidate.nonce);
             }
-            let hash = candidate.calculate_hash();
-            candidate.hash = hex::encode(&hash);
-            let binary_hash = hash_to_binary_representation(&hash);
-            if binary_hash.starts_with(DIFFICULTY_PREFIX) {
+            candidate.hash = candidate.calculate_hash();
+            if candidate.hash.starts_with(DIFFICULTY_PREFIX) {
                 debug!(
-                    "mined! nonce: {}, hash: {}, binary hash: {}",
-                    candidate.nonce, candidate.hash, binary_hash
+                    "mined! nonce: {}, hash: {}",
+                    candidate.nonce, candidate.hash
                 );
 
                 return candidate;
@@ -203,14 +195,6 @@ impl Display for Ledger {
             self.blocks.last().unwrap()
         )
     }
-}
-
-fn hash_to_binary_representation(hash: &[u8]) -> String {
-    let mut res: String = String::default();
-    for c in hash {
-        res.push_str(&format!("{:b}", c));
-    }
-    res
 }
 
 #[cfg(test)]
@@ -281,7 +265,7 @@ mod tests {
         // hash is invalid hex
         assert!(!block.is_valid());
 
-        block.hash = hex::encode(block.calculate_hash());
+        block.hash = block.calculate_hash();
         assert!(block.is_valid());
         assert!(block.extends(&genesis));
 
@@ -290,7 +274,7 @@ mod tests {
         assert!(!block.is_valid());
 
         // hash is valid but doesn't meet proof of work
-        block.hash = hex::encode(block.calculate_hash());
+        block.hash = block.calculate_hash();
         assert!(!block.is_valid());
     }
 
