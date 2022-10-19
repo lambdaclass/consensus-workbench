@@ -105,10 +105,14 @@ mod tests {
         format!(".db_test/{}", suffix)
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_only_primary_server() {
         let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
-        Receiver::spawn(address, node::Node::primary(&db_path("primary1")));
+
+        tokio::spawn(async move {
+            let receiver = Receiver::new(address, node::Node::primary(&db_path("primary1")));
+            receiver.run().await;
+        });
         sleep(Duration::from_millis(10)).await;
 
         let reply = Command::Get {
@@ -139,15 +143,22 @@ mod tests {
         assert_eq!("v1".to_string(), reply.unwrap());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_replicated_server() {
         fs::remove_dir_all(".db_test_primary2").unwrap_or_default();
         fs::remove_dir_all(".db_test_backup2").unwrap_or_default();
 
         let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
         let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
-        Receiver::spawn(address_replica, node::Node::backup(&db_path("backup2")));
-        Receiver::spawn(address_primary, node::Node::primary(&db_path("primary2")));
+        tokio::spawn(async move {
+            let receiver = Receiver::new(address_replica, node::Node::backup(&db_path("backup2")));
+            receiver.run().await;
+        });
+        tokio::spawn(async move {
+            let receiver =
+                Receiver::new(address_primary, node::Node::primary(&db_path("primary2")));
+            receiver.run().await;
+        });
 
         // TODO: this "Subscribe" message is sent here for testing purposes.
         //       But it shouldn't be here. We should have an initialization loop
