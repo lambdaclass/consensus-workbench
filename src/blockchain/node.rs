@@ -225,7 +225,7 @@ impl Node {
         self.broadcast(message).await;
     }
 
-    /// TODO
+    /// Abort the currently running miner task and start a new one based on the latest ledger and mempool.
     fn restart_miner(&mut self) {
         let previous_block = self.ledger.blocks.last().unwrap().clone();
         let transactions = self.mempool.clone().into_iter().collect();
@@ -239,7 +239,7 @@ impl Node {
         });
     }
 
-    /// TODO
+    /// Send the given message to all known peers. Doesn't wait for acknowledge.
     async fn broadcast(&mut self, message: Message) {
         if let Some(data) = serialize(&message) {
             let peers_vec = self.peers.clone().into_iter().collect();
