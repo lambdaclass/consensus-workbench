@@ -1,5 +1,5 @@
-/// TODO
-/// loosely based on https://blog.logrocket.com/how-to-build-a-blockchain-in-rust/
+/// This module contains blocks and a ledger (a list of those blocks where each element contains a hash of the previous one)
+/// used as the commit log of a key value store: each block contains a (possibly empty) list of write (set) commands of key values.
 use std::fmt::Display;
 
 use anyhow::{bail, Result};
