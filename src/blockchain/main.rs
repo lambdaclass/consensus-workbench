@@ -71,11 +71,14 @@ async fn spawn_node_tasks(
 
 #[derive(Clone)]
 struct NodeReceiverHandler {
+    /// Used to forward incoming TCP messages to the node
     network_sender: Sender<(node::Message, oneshot::Sender<Result<Option<String>>>)>,
 }
 
 #[async_trait]
 impl MessageHandler for NodeReceiverHandler {
+    /// When a TCP message is received, interpret it as a node::Message and forward it to the node task.
+    /// Send the node's response back through the TCP connection.
     async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
         let request = node::Message::deserialize(bytes)?;
 
