@@ -18,7 +18,7 @@ use lib::command::Command as ClientCommand;
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Message {
     /// A client transaction either received directly from the client or forwarded by a peer.
-    Command(String, ClientCommand),
+    Command(TransactionId, ClientCommand),
 
     /// A request from a node to its seed to get it's current ledger.
     GetState { reply_to: SocketAddr },
@@ -48,7 +48,7 @@ pub struct Node {
     sender: SimpleSender,
 
     /// The pool of pending transactions. The miner task will draw from this pool to include in blocks.
-    mempool: HashMap<String, ClientCommand>,
+    mempool: HashMap<TransactionId, ClientCommand>,
 
     /// The blockchain of committed transactions.
     ledger: Ledger,
@@ -67,7 +67,7 @@ pub struct Node {
 use ClientCommand::*;
 use Message::*;
 
-use crate::ledger::{Block, Ledger};
+use crate::ledger::{Block, Ledger, TransactionId};
 
 impl Node {
     /// Initialize the node attributes. It doesn't run it nor starts mining.

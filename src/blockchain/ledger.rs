@@ -12,7 +12,8 @@ use sha2::{Digest, Sha256};
 
 const DIFFICULTY_PREFIX: &str = "0000";
 
-// TODO add type alias for txid and transaction
+pub type TransactionId = String;
+pub type Transaction = (TransactionId, Command);
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Block {
@@ -20,7 +21,7 @@ pub struct Block {
     miner_id: String,
     hash: String,
     previous_hash: String,
-    data: Vec<(String, Command)>,
+    data: Vec<Transaction>,
     nonce: u64,
 }
 
@@ -175,7 +176,7 @@ impl Ledger {
     pub fn mine_block(
         miner_id: &str,
         previous_block: Block,
-        transactions: Vec<(String, Command)>,
+        transactions: Vec<Transaction>,
     ) -> Block {
         debug!("mining block...");
         let mut candidate = Block {
