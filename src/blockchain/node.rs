@@ -3,7 +3,7 @@ use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use core::fmt;
 use lib::network::SimpleSender;
-use log::{error, info};
+use log::{error, info, debug};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::{collections::HashMap, net::SocketAddr};
@@ -142,6 +142,7 @@ impl Node {
             Command(txid, Set { value, key }) => {
                 if self.mempool.contains_key(&txid) || self.ledger.contains(&txid) {
                     // TODO consider this case in tests
+                    debug!("skipping already seen transaction {}", txid);
                     Ok(None)
                 } else {
                     let cmd = Set {
