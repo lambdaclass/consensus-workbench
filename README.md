@@ -1,5 +1,5 @@
 # Consensus workbench
-Proof of concept Rust implementations for various distributed systems patterns.
+Proof of concept Rust implementations for various distributed systems protocols.
 
 ## Example usage
 
@@ -14,4 +14,12 @@ Proof of concept Rust implementations for various distributed systems patterns.
 
 1. [Single node server](/src/single_node)
 1. [Primary/backup server](/src/primary_backup)
-1. [Two-phase commit](/src/two_phase_commit) (planned)
+1. Two-phase commit (TODO)
+2. Lock-commit (TODO)
+3. Raft (TODO)
+3. [Proof of work blockchain](/src/blockchain)
+4. Streamlet (TODO)
+5. Tendermint (TODO)
+5. HotStuff (TODO)
+6. Narwhal+Tusk (TODO)
+6. Narwhal+Bullshark (TODO)

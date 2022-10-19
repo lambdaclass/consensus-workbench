@@ -22,9 +22,13 @@ path = "src/single_node/main.rs"
 name = "node_replication"
 path = "src/primary_backup/main.rs"
 
+[[bin]]
+name = "blockchain"
+path = "src/blockchain/main.rs"
+
 
 [dependencies]
-tokio = { version = "1.5.0", features = ["rt", "net", "sync", "macros", "time", "rt-multi-thread"] }
+tokio = { version = "1.15.0", features = ["full", "tracing"] }
 tokio-util = { version = "0.7.3", features = ["codec"] }
 thiserror = "1.0.24"
 bytes = "1.0.1"
@@ -38,6 +42,11 @@ bincode = "1.3.3"
 serde = { version = "1.0", features = ["derive"] }
 rocksdb = "0.19.0"
 anyhow = "1.0.65"
+sha2 = "0.9.8"
+hex = "0.4"
+uuid = { version = "1.2.1", features = ["v4"] }
+itertools = "0.10.5"
 
 [dev-dependencies]
 ctor = "0.1.23"
+tokio-retry = "0.3.0"

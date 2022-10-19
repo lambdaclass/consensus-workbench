@@ -7,7 +7,6 @@ use futures::stream::StreamExt as _;
 use log::{debug, warn};
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::task::JoinHandle;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 /// Convenient alias for the writer end of the TCP channel.
@@ -33,12 +32,12 @@ pub struct Receiver<Handler: MessageHandler> {
 
 impl<Handler: MessageHandler> Receiver<Handler> {
     /// Spawn a new network receiver handling connections from any incoming peer.
-    pub fn spawn(address: SocketAddr, handler: Handler) -> JoinHandle<()> {
-        tokio::spawn(async move { Self { address, handler }.run().await })
+    pub fn new(address: SocketAddr, handler: Handler) -> Self {
+        Self { address, handler }
     }
 
     /// Main loop responsible to accept incoming connections and spawn a new runner to handle it.
-    async fn run(&self) {
+    pub async fn run(&self) {
         let listener = TcpListener::bind(&self.address)
             .await
             .expect("Failed to bind TCP port");
@@ -121,7 +120,10 @@ mod tests {
         // Make the network receiver.
         let address = "127.0.0.1:4000".parse::<SocketAddr>().unwrap();
         let (tx, mut rx) = channel(1);
-        Receiver::spawn(address, TestHandler { deliver: tx });
+        tokio::spawn(async move {
+            let receiver = Receiver::new(address, TestHandler { deliver: tx });
+            receiver.run().await;
+        });
         sleep(Duration::from_millis(50)).await;
 
         // Send a message.
