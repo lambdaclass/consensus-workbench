@@ -35,36 +35,32 @@ pub enum Message {
     },
 }
 
-impl Message {
-    /// Incoming requests can be either messages sent by other nodes or client commands
-    /// (which are server implementation agnostic)
-    /// in which case they are wrapped into Message::Command to treat them uniformly by
-    /// the state machine
-    pub fn deserialize(data: Bytes) -> Result<Self> {
-        // this allows handling both client and peer messages from the same tcp listener
-        // alternatively the network code could be refactored to have different tcp connections
-        // and feeding both types of incoming messages into the same async handler task
-        if let Ok(c) = bincode::deserialize::<ClientCommand>(&data) {
-            // for now generating the uuid here, should we let the client do it?
-            let txid = uuid::Uuid::new_v4().to_string();
-            Ok(Self::Command(txid, c))
-        } else {
-            bincode::deserialize(&data).map_err(|e| anyhow!(e))
-        }
-    }
-}
-
-/// FIXME
+/// A node in the blockchain network.
 pub struct Node {
-    // FIXME add docs to each field
-    pub address: SocketAddr,
-    pub peers: HashSet<SocketAddr>,
+    /// The ip+port this node is currently listening on for peer messages.
+    address: SocketAddr,
+
+    /// The list of known peers, to which this node will broadcast message to.
+    peers: HashSet<SocketAddr>,
+
+    /// Network sender to communicate with peers, for example for broadcasting messages.
     sender: SimpleSender,
+
+    /// The pool of pending transactions. The miner task will draw from this pool to include in blocks.
     mempool: HashMap<String, ClientCommand>,
+
+    /// The blockchain of committed transactions.
     ledger: Ledger,
+
+    /// A handler to the local task that's mining blocks. Necessary to reset the mining whenever another
+    /// node's ledger is found to be preferred than the local one which the mining was based on.
     miner_task: JoinHandle<()>,
-    miner_sender: Sender<Block>,
+
+    /// The channel handler the node listens to for newly mined blocks.
     miner_receiver: Receiver<Block>,
+
+    /// A copy of the sender end of the mining channel, held to pass to each new miner task.
+    miner_sender: Sender<Block>,
 }
 
 use ClientCommand::*;
@@ -251,6 +247,25 @@ impl Node {
             // forward the command to all replicas and wait for them to respond
             info!("Broadcasting to {:?}", peers_vec);
             self.sender.broadcast(peers_vec, data).await;
+        }
+    }
+}
+
+impl Message {
+    /// Incoming requests can be either messages sent by other nodes or client commands
+    /// (which are server implementation agnostic)
+    /// in which case they are wrapped into Message::Command to treat them uniformly by
+    /// the state machine
+    pub fn deserialize(data: Bytes) -> Result<Self> {
+        // this allows handling both client and peer messages from the same tcp listener
+        // alternatively the network code could be refactored to have different tcp connections
+        // and feeding both types of incoming messages into the same async handler task
+        if let Ok(c) = bincode::deserialize::<ClientCommand>(&data) {
+            // for now generating the uuid here, should we let the client do it?
+            let txid = uuid::Uuid::new_v4().to_string();
+            Ok(Self::Command(txid, c))
+        } else {
+            bincode::deserialize(&data).map_err(|e| anyhow!(e))
         }
     }
 }
