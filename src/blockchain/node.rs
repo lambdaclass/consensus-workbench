@@ -117,6 +117,10 @@ impl Node {
                 }
                 Some((message, reply_sender)) = network_receiver.recv() => {
                     let result = self.handle_message(message.clone()).await;
+
+                    // FIXME we only send non-empty replies to clients here.
+                    // the network peer messages are done inside the handle_message function instead
+                    // this may be improved by separating the network and client listeners
                     if let Err(error) = reply_sender.send(result) {
                         error!("failed to send message {:?} response {:?}", message, error);
                     };
@@ -300,15 +304,56 @@ fn serialize<T: Serialize + fmt::Debug>(message: &T) -> Option<Bytes> {
 
 #[cfg(test)]
 mod tests {
-    #[tokio::test]
-    async fn set_command() {
-        // if already in ledger ignore
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn transactions() {
+        let address: SocketAddr = "127.0.0.1:6279".parse().unwrap();
+        let mut node = Node::new(address, None);
+
+        // send a new transaction to the ledger -> adds it to the mempool
+        let tx1 = Command(
+            "tx1".to_string(),
+            ClientCommand::Set {
+                key: "key".to_string(),
+                value: "value".to_string(),
+            },
+        );
+
+        node.handle_message(tx1.clone()).await.unwrap();
+        assert_eq!(1, node.mempool.len());
+        assert!(node.mempool.contains_key("tx1"));
+
         // if already in mempool ignore
-        // else add to mempool
+        node.handle_message(tx1.clone()).await.unwrap();
+        assert_eq!(1, node.mempool.len());
+        assert!(node.mempool.contains_key("tx1"));
+
+        // same operation with different transaction id is considered different
+        let tx2 = Command(
+            "tx2".to_string(),
+            ClientCommand::Set {
+                key: "key".to_string(),
+                value: "value".to_string(),
+            },
+        );
+        node.handle_message(tx2.clone()).await.unwrap();
+        assert_eq!(2, node.mempool.len());
+        assert!(node.mempool.contains_key("tx2"));
+
+        // don't inlcude a transaction in the mempool if it's already in the ledger
+        node.restart_miner();
+        let block = node.miner_receiver.recv().await.unwrap();
+        let new_ledger = node.ledger.extend(block).unwrap();
+        node.update_ledger(new_ledger).await;
+        assert_eq!(0, node.mempool.len());
+        assert!(node.ledger.contains("tx2"));
+        node.handle_message(tx2.clone()).await.unwrap();
+        assert_eq!(0, node.mempool.len());
     }
 
-    #[tokio::test]
-    async fn state() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ledger() {
         // if ledger is shorter ignore
         // if ledger is valid and longer replace current one
         // transactions are removed from mempool
