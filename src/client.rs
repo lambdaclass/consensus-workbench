@@ -28,10 +28,7 @@ async fn main() -> Result<()> {
 
     info!("Node socket: {}{}", cli.address, cli.port);
 
-    simple_logger::SimpleLogger::new()
-        .env()
-        .with_level(log::LevelFilter::Info)
-        .init()?;
+    simple_logger::SimpleLogger::new().env().init()?;
 
     // using a reliable sender to get a response back
     let address = SocketAddr::new(cli.address, cli.port);

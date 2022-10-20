@@ -61,11 +61,7 @@ async fn main() {
 
     info!("Node socket: {}:{}", cli.address, cli.port);
 
-    simple_logger::SimpleLogger::new()
-        .env()
-        .with_level(log::LevelFilter::Info)
-        .init()
-        .unwrap();
+    simple_logger::SimpleLogger::new().env().init().unwrap();
 
     let address = SocketAddr::new(cli.address, cli.port);
     let store = Store::new(".db_single_node").unwrap();
@@ -87,11 +83,7 @@ mod tests {
         fs::remove_dir_all(db_path).unwrap_or_default();
         let store = Store::new(db_path).unwrap();
 
-        simple_logger::SimpleLogger::new()
-            .env()
-            .with_level(log::LevelFilter::Info)
-            .init()
-            .unwrap();
+        simple_logger::SimpleLogger::new().env().init().unwrap();
 
         let address: SocketAddr = "127.0.0.1:6182".parse().unwrap();
         tokio::spawn(async move {
