@@ -11,12 +11,14 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-// The more zeroes starting from the left, the higher the difficulty
+// Difficulty is expressed as the maximum u32 unsigned integer shifted a number of
+// bits to the right. This way, a difficulty of u32::MAX >> n means "the hash has
+// to start with  n zeroes". The higher the n, the higher difficulty.
 const DIFFICULTY_TARGET: u32 = if cfg!(test) {
     // Lower the difficulty for testing so it doesn't take very long
-    0b00000000_00000000_11111111_11111111
+    u32::MAX >> 16
 } else {
-    0b00000000_00000000_00111111_11111111
+    u32::MAX >> 18
 };
 
 pub type TransactionId = String;
@@ -246,7 +248,7 @@ fn is_below_difficulty_target(hash: &str) -> Result<bool> {
         + (u32::from(hash_bytes[2]) << 16)
         + (u32::from(hash_bytes[3]) << 24);
 
-    return Ok(first_four_bytes < DIFFICULTY_TARGET);
+    Ok(first_four_bytes < DIFFICULTY_TARGET)
 }
 
 #[cfg(test)]
