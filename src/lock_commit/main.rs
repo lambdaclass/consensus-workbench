@@ -1,5 +1,8 @@
 use clap::Parser;
-use lib::{command::{self, ClientCommand}, network::Receiver as NetworkReceiver};
+use lib::{
+    command::{self, ClientCommand},
+    network::Receiver as NetworkReceiver,
+};
 use log::{info, warn};
 use tokio::sync::mpsc::{self, channel, Receiver, Sender};
 
@@ -10,7 +13,8 @@ use std::{
 };
 
 use crate::{
-    node::{Node, State}, command_ext::{Command, NetworkCommand},
+    command_ext::{Command, NetworkCommand},
+    node::{Node, State},
 };
 
 mod command_ext;
@@ -76,12 +80,11 @@ async fn main() {
                 if timer_start.read().unwrap().elapsed() > delta * 8 {
                     *timer_start.write().unwrap() = Instant::now();
                     info!("{}: timer expired!", address);
-                    let blame_message =
-                        Command::Network(NetworkCommand::Blame {
-                            socket_addr: address,
-                            view: 0,
-                            timer_expired: true,
-                        });
+                    let blame_message = Command::Network(NetworkCommand::Blame {
+                        socket_addr: address,
+                        view: 0,
+                        timer_expired: true,
+                    });
                     let _ = blame_message.send_to(address).await;
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
