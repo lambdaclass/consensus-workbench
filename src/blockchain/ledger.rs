@@ -41,7 +41,7 @@ impl Block {
             hasher.update(cmd.to_string());
         }
         let hash = hasher.finalize().as_slice().to_owned();
-        hex::encode(hash)
+        hex::encode(&hash)
     }
 
     /// Create a genesis block, which is expected to be the first block of any valid ledger.
@@ -68,8 +68,7 @@ impl Block {
     /// Returns if this is a valid node: if its hash attribute matches the result of hashing the block data
     /// and meets the difficulty prefix (the amount of leading zeros) for the proof of work.
     fn is_valid(&self) -> bool {
-        if !is_below_difficulty_target(&hex::decode(self.hash.clone()).unwrap(), DIFFICULTY_TARGET)
-        {
+        if !is_below_difficulty_target(&self.hash) {
             warn!("block has invalid difficulty {}", self.hash);
             return false;
         } else if self.calculate_hash() != self.hash {
@@ -200,10 +199,7 @@ impl Ledger {
                 debug!("nonce: {}", candidate.nonce);
             }
             candidate.hash = candidate.calculate_hash();
-            if is_below_difficulty_target(
-                &hex::decode(candidate.hash.clone()).unwrap(),
-                DIFFICULTY_TARGET,
-            ) {
+            if is_below_difficulty_target(&candidate.hash) {
                 debug!(
                     "mined! nonce: {}, hash: {}",
                     candidate.nonce, candidate.hash
@@ -227,13 +223,14 @@ impl Display for Ledger {
     }
 }
 
-fn is_below_difficulty_target(hash: &[u8], target: u32) -> bool {
-    let first_four_bytes = u32::from(hash[0])
-        + (u32::from(hash[1]) << 8)
-        + (u32::from(hash[2]) << 16)
-        + (u32::from(hash[3]) << 24);
+fn is_below_difficulty_target(hash: &str) -> bool {
+    let hash_bytes = hex::decode(hash).unwrap();
+    let first_four_bytes = u32::from(hash_bytes[0])
+        + (u32::from(hash_bytes[1]) << 8)
+        + (u32::from(hash_bytes[2]) << 16)
+        + (u32::from(hash_bytes[3]) << 24);
 
-    return first_four_bytes < target;
+    return first_four_bytes < DIFFICULTY_TARGET;
 }
 
 #[cfg(test)]
