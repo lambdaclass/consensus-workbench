@@ -22,7 +22,7 @@ Some key to-dos/leftover work:
 - Right now, we are using the shared network library which will clone the message handler. This message handler is implemented on the Node struct, which has shared state with Arc<RwLocks<>>.
     - Ideally this implementation needs to change and use channels
 - Tests need to include view-change mechanism, and general queries to the nodes to see if Propose/Lock messages have been broadcast on the network
-- General cleanup 
+- General cleanup/finishing touches
 
 ## Example usage
 `start.sh [number_nodes]` is a small script used to start up as many nodes as you want in background:

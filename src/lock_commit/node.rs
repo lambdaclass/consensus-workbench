@@ -1,4 +1,4 @@
-use crate::lock_commit_command::{Command, CommandView, NetworkCommand};
+use crate::command_ext::{Command, CommandView, NetworkCommand};
 /// This module contains an implementation nodes that can run in primary or backup mode.
 /// Every Set command to a primary node will be broadcasted reliably for the backup nodes to replicate it.
 /// We plan to add backup promotion in case of primary failure.

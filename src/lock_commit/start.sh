@@ -1,8 +1,15 @@
 #!/bin/bash
+# Start a number of nodes running on different sockets. The amount of nodes that start should be passed to the script as its only argument.
+# Example call: ./start.sh 3
+
+if [ $# -ne 1 ]
+then
+  echo "Incorrect number of arguments. Usage: ./start.sh {number-of-nodes}"
+  exit 1
+fi
 
 i=1; j=0
 LIST_PEERS="127.0.0.1:6100"
-
 
 while [ $i -lt $1 ]; do
    PORT=$((6100+$i))

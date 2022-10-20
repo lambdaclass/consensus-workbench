@@ -1,5 +1,5 @@
 use clap::Parser;
-use lib::{command, network::Receiver as NetworkReceiver};
+use lib::{command::{self, ClientCommand}, network::Receiver as NetworkReceiver};
 use log::{info, warn};
 use tokio::sync::mpsc::{self, channel, Receiver, Sender};
 
@@ -10,11 +10,10 @@ use std::{
 };
 
 use crate::{
-    lock_commit_command::Command,
-    node::{Node, State},
+    node::{Node, State}, command_ext::{Command, NetworkCommand},
 };
 
-mod lock_commit_command;
+mod command_ext;
 mod node;
 
 #[derive(Parser)]
@@ -41,7 +40,7 @@ struct Cli {
 
     /// The key/value store command to execute.
     #[clap(subcommand)]
-    command: Option<command::ClientCommand>,
+    command: Option<ClientCommand>,
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -78,7 +77,7 @@ async fn main() {
                     *timer_start.write().unwrap() = Instant::now();
                     info!("{}: timer expired!", address);
                     let blame_message =
-                        Command::Network(lock_commit_command::NetworkCommand::Blame {
+                        Command::Network(NetworkCommand::Blame {
                             socket_addr: address,
                             view: 0,
                             timer_expired: true,
@@ -108,6 +107,8 @@ async fn send_command(socket_addr: SocketAddr, command: Command) {
 
 #[cfg(test)]
 mod tests {
+    use crate::command_ext::Command;
+
     use super::*;
     use lib::command::ClientCommand;
     use std::fs;
