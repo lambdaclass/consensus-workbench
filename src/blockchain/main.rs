@@ -30,6 +30,9 @@ struct Cli {
     /// if running as a replica, this is the address of the primary
     #[clap(long, value_parser, value_name = "ADDR")]
     seed: Option<SocketAddr>,
+    /// Log Level: off, error, warn, info, debug or trace.
+    #[clap(short, long, value_parser, value_name = "LEVEL", default_value_t = log::LevelFilter::Info)]
+    log_level: log::LevelFilter,
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -40,7 +43,7 @@ async fn main() {
 
     simple_logger::SimpleLogger::new()
         .env()
-        .with_level(log::LevelFilter::Info)
+        .with_level(cli.log_level)
         .init()
         .unwrap();
 
