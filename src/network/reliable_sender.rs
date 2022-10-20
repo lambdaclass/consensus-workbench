@@ -1,3 +1,4 @@
+// Copyright(C) Facebook, Inc. and its affiliates.
 use super::error::NetworkError;
 use bytes::Bytes;
 use futures::sink::SinkExt as _;
