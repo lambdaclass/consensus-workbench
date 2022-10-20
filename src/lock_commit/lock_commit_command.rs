@@ -1,9 +1,9 @@
-use core::fmt;
-use std::{net::SocketAddr};
 use bytes::Bytes;
+use core::fmt;
+use std::net::SocketAddr;
 
-use lib::{network::ReliableSender, command::ClientCommand};
-use serde::{Serialize, Deserialize};
+use lib::{command::ClientCommand, network::ReliableSender};
+use serde::{Deserialize, Serialize};
 
 use anyhow::{anyhow, Result};
 
@@ -19,7 +19,7 @@ pub enum Command {
 pub enum NetworkCommand {
     Propose {
         command_view: CommandView,
-    }, 
+    },
     Lock {
         socket_addr: SocketAddr,
         command_view: CommandView,
@@ -32,12 +32,12 @@ pub enum NetworkCommand {
     Blame {
         socket_addr: SocketAddr,
         view: u128,
-        timer_expired: bool
+        timer_expired: bool,
     },
     ViewChange {
         socket_addr: SocketAddr,
         new_view: u128,
-        highest_lock: CommandView
+        highest_lock: CommandView,
     },
 }
 
@@ -53,8 +53,7 @@ impl Command {
         let response: Result<Option<String>, String> = bincode::deserialize(&response)?;
         response.map_err(|e| anyhow!(e))
     }
-} 
-
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct CommandView {

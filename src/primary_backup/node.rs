@@ -138,10 +138,7 @@ impl Node {
 
         // forward the command to all replicas and wait for them to respond
         info!("Forwarding set to {:?}", self.peers);
-        let handlers = self
-            .sender
-            .broadcast(&self.peers, sync_message)
-            .await;
+        let handlers = self.sender.broadcast(&self.peers, sync_message).await;
         futures::future::join_all(handlers).await;
     }
 }

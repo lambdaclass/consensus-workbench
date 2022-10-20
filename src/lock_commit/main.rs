@@ -1,14 +1,21 @@
 use clap::Parser;
-use lib::{network::Receiver as NetworkReceiver, command};
+use lib::{command, network::Receiver as NetworkReceiver};
 use log::{info, warn};
-use tokio::sync::mpsc::{channel, Receiver, Sender, self};
+use tokio::sync::mpsc::{self, channel, Receiver, Sender};
 
-use std::{net::{IpAddr, Ipv4Addr, SocketAddr}, time::{Duration, Instant}, sync::{Mutex, Arc, RwLock}};
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::{Arc, Mutex, RwLock},
+    time::{Duration, Instant},
+};
 
-use crate::{node::{Node, State}, lock_commit_command::Command};
+use crate::{
+    lock_commit_command::Command,
+    node::{Node, State},
+};
 
-mod node;
 mod lock_commit_command;
+mod node;
 
 #[derive(Parser)]
 #[clap(author, version, about)]
@@ -50,11 +57,16 @@ async fn main() {
 
     // because the Client application does not work with this (sends a ClientCommand not wrapped in Command())
     // if the CLI has a command, this works as a client
-    if let Some(cmd) = cli.command  {
-        return send_command(address, Command::Client(cmd)).await;    
+    if let Some(cmd) = cli.command {
+        return send_command(address, Command::Client(cmd)).await;
     }
 
-    let node = Node::new(cli.peers, &format!(".db_{}", address.port()), address, timer_start.clone());
+    let node = Node::new(
+        cli.peers,
+        &format!(".db_{}", address.port()),
+        address,
+        timer_start.clone(),
+    );
 
     // todo/fixme: this needs to change and use channels
     if cli.view_change {
@@ -65,7 +77,12 @@ async fn main() {
                 if timer_start.read().unwrap().elapsed() > delta * 8 {
                     *timer_start.write().unwrap() = Instant::now();
                     info!("{}: timer expired!", address);
-                    let blame_message = Command::Network(lock_commit_command::NetworkCommand::Blame { socket_addr: address, view: 0, timer_expired: true });
+                    let blame_message =
+                        Command::Network(lock_commit_command::NetworkCommand::Blame {
+                            socket_addr: address,
+                            view: 0,
+                            timer_expired: true,
+                        });
                     let _ = blame_message.send_to(address).await;
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -77,11 +94,10 @@ async fn main() {
         node.socket_address,
         matches!(node.get_state(), State::Primary)
     );
-    NetworkReceiver::new(address, node).run().await
-    ;
+    NetworkReceiver::new(address, node).run().await;
 }
 
-async fn send_command(socket_addr: SocketAddr, command: Command){
+async fn send_command(socket_addr: SocketAddr, command: Command) {
     // using a reliable sender to get a response back
     match command.send_to(socket_addr).await {
         Ok(Some(value)) => info!("{}", value),
@@ -93,8 +109,8 @@ async fn send_command(socket_addr: SocketAddr, command: Command){
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use lib::command::ClientCommand;
+    use std::fs;
     use tokio::time::{sleep, Duration};
 
     #[ctor::ctor]
@@ -116,7 +132,12 @@ mod tests {
         tokio::spawn(async move {
             let receiver = NetworkReceiver::new(
                 address,
-                node::Node::new(vec![address], &db_path("primary1"), address, timer_start.clone()),
+                node::Node::new(
+                    vec![address],
+                    &db_path("primary1"),
+                    address,
+                    timer_start.clone(),
+                ),
             );
             receiver.run().await;
         });
@@ -169,7 +190,7 @@ mod tests {
                     vec![address_primary, address_replica],
                     &db_path("backup2"),
                     address_replica,
-                    timer_start
+                    timer_start,
                 ),
             );
             receiver.run().await;
@@ -182,7 +203,7 @@ mod tests {
                     vec![address_primary, address_replica],
                     &db_path("primary2"),
                     address_primary,
-                    timer_start_secondary
+                    timer_start_secondary,
                 ),
             );
             receiver.run().await;

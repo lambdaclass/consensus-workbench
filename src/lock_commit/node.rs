@@ -1,3 +1,4 @@
+use crate::lock_commit_command::{Command, CommandView, NetworkCommand};
 /// This module contains an implementation nodes that can run in primary or backup mode.
 /// Every Set command to a primary node will be broadcasted reliably for the backup nodes to replicate it.
 /// We plan to add backup promotion in case of primary failure.
@@ -14,9 +15,9 @@ use log::info;
 use std::{
     collections::HashSet,
     net::SocketAddr,
-    sync::{Arc, Mutex, RwLock}, time::Instant,
+    sync::{Arc, Mutex, RwLock},
+    time::Instant,
 };
-use crate::lock_commit_command::{NetworkCommand, CommandView, Command};
 
 #[derive(Clone)]
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
@@ -39,7 +40,6 @@ pub struct Node {
     pub blame_messages: Arc<Mutex<HashSet<SocketAddr>>>,
 }
 
-
 /// The state of a node viewed as a state-machine.
 #[derive(Clone, Copy)]
 pub enum State {
@@ -52,7 +52,7 @@ use State::*;
 #[async_trait]
 impl MessageHandler for Node {
     async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
-        let request:Command = bincode::deserialize(&bytes)?;
+        let request: Command = bincode::deserialize(&bytes)?;
         info!("{}: Received request {:?}", self.socket_address, &request);
 
         let state = self.get_state();
@@ -64,7 +64,7 @@ impl MessageHandler for Node {
                 self.handle_client_command(cmd).await
             }
 
-            // if we receive a client command that is not a get and we are primary, prepare to propose 
+            // if we receive a client command that is not a get and we are primary, prepare to propose
             (Primary, Command::Client(client_comand)) => {
                 // we advance the view according to the primary and propose it
                 let command_view = CommandView {
@@ -75,7 +75,7 @@ impl MessageHandler for Node {
                 // since we are primary, we lock the command view
 
                 self.lock_command_view(&command_view);
-                
+
                 let command = NetworkCommand::Propose {
                     command_view: command_view.clone(),
                 };
@@ -124,7 +124,7 @@ impl MessageHandler for Node {
 
             // for the primary, the command is committed as we reach quorum, so we can return Ok
             (Primary, Command::Network(NetworkCommand::Commit { .. })) => Ok(None),
-            
+
             // the backup gets a Commit message after we reach quorum, so we can go ahead and commit
             (Backup, Command::Network(NetworkCommand::Commit { command_view })) => {
                 info!("about to try commit as a response to Commit message");
@@ -141,11 +141,22 @@ impl MessageHandler for Node {
                     _ => Err(anyhow!("Error committing command")),
                 };
                 result
-            },
+            }
             // View change moves the view/primary after enough blames were emitted
-            (_, Command::Network(NetworkCommand::ViewChange { socket_addr: _, new_view , highest_lock: _})) => {
+            (
+                _,
+                Command::Network(NetworkCommand::ViewChange {
+                    socket_addr: _,
+                    new_view,
+                    highest_lock: _,
+                }),
+            ) => {
                 if new_view > *self.current_view.read().unwrap() {
-                    info!("{}: View-change performed, primary is {}", self.socket_address, self.get_primary(new_view));
+                    info!(
+                        "{}: View-change performed, primary is {}",
+                        self.socket_address,
+                        self.get_primary(new_view)
+                    );
                     *self.timer_start.write().unwrap() = Instant::now();
                     self.trigger_view_change(new_view);
                 }
@@ -153,14 +164,21 @@ impl MessageHandler for Node {
             }
             // blames are emitted after timer expires or if 'f' nodes sent us a blame command
             // this differentiation is so that we can make the protocol partially synchronous instead of synchronous
-            (_, Command::Network(NetworkCommand::Blame {socket_addr,view, timer_expired })) => self.handle_blame(view, socket_addr, timer_expired).await,
+            (
+                _,
+                Command::Network(NetworkCommand::Blame {
+                    socket_addr,
+                    view,
+                    timer_expired,
+                }),
+            ) => self.handle_blame(view, socket_addr, timer_expired).await,
             _ => {
                 info!("{} :unhandled command", self.socket_address);
                 Err(anyhow!("Unhandled command"))
             }
         };
 
-        let result: Result<Option<Vec<u8>>, String> = result.map_err(|e| e.to_string()); 
+        let result: Result<Option<Vec<u8>>, String> = result.map_err(|e| e.to_string());
         let reply = bincode::serialize(&result)?;
         let _ = writer.send(reply.into()).await?;
 
@@ -169,8 +187,12 @@ impl MessageHandler for Node {
 }
 
 impl Node {
-    pub fn new(peers: Vec<SocketAddr>, db_path: &str, address: SocketAddr, timer_start: Arc<RwLock<Instant>>
-) -> Self {
+    pub fn new(
+        peers: Vec<SocketAddr>,
+        db_path: &str,
+        address: SocketAddr,
+        timer_start: Arc<RwLock<Instant>>,
+    ) -> Self {
         Self {
             store: Store::new(db_path).unwrap(),
             peers: peers,
@@ -180,23 +202,30 @@ impl Node {
             lock_responses: Arc::new(Mutex::new(HashSet::new())),
             blame_messages: Arc::new(Mutex::new(HashSet::new())),
             socket_address: address,
-            timer_start
+            timer_start,
         }
     }
 
-    async fn handle_lock_message(&mut self, socket_addr: SocketAddr, command_view: CommandView) ->  Result<Option<Vec<u8>>, anyhow::Error> {
+    async fn handle_lock_message(
+        &mut self,
+        socket_addr: SocketAddr,
+        command_view: CommandView,
+    ) -> Result<Option<Vec<u8>>, anyhow::Error> {
         if command_view.view <= *self.current_view.read().unwrap() {
             info!("Received command with an old, previously committed view, discarding");
             Ok(None)
         } else {
             let _ = self.lock_responses.lock().unwrap().insert(socket_addr);
             let response_count = self.lock_responses.lock().unwrap().len();
-            
+
             // the literature defines quorum as a function of the adversarial threshold we want to support
             // n > f, n > 2f, or n > 3f are the alternatives; this uses n > 2f model
             let quorum_count = ((self.peers.len()) / 2) + 1;
 
-            info!("Received lock, did we get quorum? {} responses so far vs expected quorum of {} ", response_count, quorum_count);
+            info!(
+                "Received lock, did we get quorum? {} responses so far vs expected quorum of {} ",
+                response_count, quorum_count
+            );
             *self.timer_start.write().unwrap() = Instant::now();
             // broadcast commit, then try commit
             if response_count >= quorum_count {
@@ -211,9 +240,8 @@ impl Node {
                 .await;
             }
             Ok(None)
+        }
     }
-}
-
 
     async fn handle_client_command(
         &self,
@@ -242,12 +270,12 @@ impl Node {
             .into();
 
         let other_peers: Vec<SocketAddr> = self
-                   .peers
-                   .iter()
-                   .copied()
-                   .filter(|x| *x != self.socket_address)
-                   .collect();
-        
+            .peers
+            .iter()
+            .copied()
+            .filter(|x| *x != self.socket_address)
+            .collect();
+
         // forward the command to all replicas and wait for them to respond
         let handlers = self.sender.broadcast(&other_peers, message).await;
 
@@ -317,8 +345,8 @@ impl Node {
         *lock = new_view;
 
         self.lock_responses.lock().unwrap().clear();
-            self.blame_messages.lock().unwrap().clear();
-            *self.command_view_lock.write().unwrap() = CommandView::new();
+        self.blame_messages.lock().unwrap().clear();
+        *self.command_view_lock.write().unwrap() = CommandView::new();
     }
 
     fn get_primary(&self, view: u128) -> &SocketAddr {
@@ -329,30 +357,40 @@ impl Node {
         *self.command_view_lock.write().unwrap() = CommandView::new();
     }
 
-    async fn handle_blame(&mut self, view: u128, socket_addr: SocketAddr, timer_expired: bool) -> Result<Option<Vec<u8>>> {
-        if view!=*self.current_view.read().unwrap() && !timer_expired { return Ok(None); } 
+    async fn handle_blame(
+        &mut self,
+        view: u128,
+        socket_addr: SocketAddr,
+        timer_expired: bool,
+    ) -> Result<Option<Vec<u8>>> {
+        if view != *self.current_view.read().unwrap() && !timer_expired {
+            return Ok(None);
+        }
 
         let _ = self.blame_messages.lock().unwrap().insert(socket_addr);
         let blame_count = self.blame_messages.lock().unwrap().len();
-        
+
         let highest_view_lock = (self.command_view_lock.read().unwrap()).clone();
 
         // from the docs, f is the amount of omission failures we want to tolerate
         // again, f is defined from the adversarial threshold of the system
-        let f = self.peers.len()/2;
+        let f = self.peers.len() / 2;
         let quorum_count = f + 1;
 
-        info!("Received blame, did we get quorum? {} responses so far vs expected quorum of {} ", blame_count, quorum_count);
-        let current_view = *self.current_view.read().unwrap() ;
+        info!(
+            "Received blame, did we get quorum? {} responses so far vs expected quorum of {} ",
+            blame_count, quorum_count
+        );
+        let current_view = *self.current_view.read().unwrap();
 
         // if we receive enough blames, even if the timer did not go off yet,
         // we send out the blame message
         if blame_count == f || timer_expired {
             // same as if the timer expired on the node
             self.broadcast_to_others(NetworkCommand::Blame {
-                socket_addr, 
-                view: current_view ,
-                timer_expired: false, 
+                socket_addr,
+                view: current_view,
+                timer_expired: false,
             })
             .await;
         }
@@ -362,9 +400,9 @@ impl Node {
             // same as if the timer expired on the node
 
             self.broadcast(NetworkCommand::ViewChange {
-                socket_addr, 
+                socket_addr,
                 new_view: current_view + 1,
-                highest_lock: highest_view_lock
+                highest_lock: highest_view_lock,
             })
             .await;
         }

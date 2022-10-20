@@ -7,7 +7,6 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
-
 #[derive(Debug, Serialize, Deserialize, Parser, Clone, PartialEq, Eq)]
 #[clap()]
 pub enum ClientCommand {
@@ -35,4 +34,3 @@ impl fmt::Display for ClientCommand {
         write!(f, "{:?}", self)
     }
 }
-

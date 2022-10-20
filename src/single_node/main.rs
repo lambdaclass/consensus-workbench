@@ -6,12 +6,12 @@ use bytes::Bytes;
 use clap::Parser;
 use futures::sink::SinkExt as _;
 use lib::{
+    command::ClientCommand,
     network::{MessageHandler, Receiver, Writer},
-    store::Store, command::ClientCommand,
+    store::Store,
 };
 use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-
 
 #[derive(Parser)]
 #[clap(author, version, about)]
