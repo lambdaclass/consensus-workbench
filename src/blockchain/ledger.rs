@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 const DIFFICULTY_PREFIX: &str = "0000";
 
 pub type TransactionId = String;
-pub type Transaction = (TransactionId, Command);
+pub type Transaction = (TransactionId, ClientCommand);
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Block {
