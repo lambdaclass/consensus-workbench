@@ -1,16 +1,14 @@
-use bytes::Bytes;
 use clap::Parser;
-use lib::{network::Receiver as NetworkReceiver};
-use network_command::NetworkCommand;
-use log::info;
+use lib::{network::Receiver as NetworkReceiver, command};
+use log::{info, warn};
 use tokio::sync::mpsc::{channel, Receiver, Sender, self};
 
 use std::{net::{IpAddr, Ipv4Addr, SocketAddr}, time::{Duration, Instant}, sync::{Mutex, Arc, RwLock}};
 
-use crate::{node::{Node, State}, network_command::Command};
+use crate::{node::{Node, State}, lock_commit_command::Command};
 
 mod node;
-mod network_command;
+mod lock_commit_command;
 
 #[derive(Parser)]
 #[clap(author, version, about)]
@@ -30,6 +28,13 @@ struct Cli {
         value_delimiter = ' '
     )]
     peers: Vec<SocketAddr>,
+
+    #[clap(short, long, value_parser, value_name = "UINT")]
+    view_change: bool,
+
+    /// The key/value store command to execute.
+    #[clap(subcommand)]
+    command: Option<command::ClientCommand>,
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -41,40 +46,55 @@ async fn main() {
     simple_logger::SimpleLogger::new().env().init().unwrap();
 
     let timer_start = Arc::new(RwLock::new(Instant::now()));
-
     let address = SocketAddr::new(cli.address, cli.port);
 
+    // because the Client application does not work with this (sends a ClientCommand not wrapped in Command())
+    // if the CLI has a command, this works as a client
+    if let Some(cmd) = cli.command  {
+        return send_command(address, Command::Client(cmd)).await;    
+    }
+
     let node = Node::new(cli.peers, &format!(".db_{}", address.port()), address, timer_start.clone());
-    // todo: this needs to change and use channels
-    tokio::spawn(async move {
-        let delta = Duration::from_millis(1000);
 
-        loop {
-            if timer_start.read().unwrap().elapsed() > delta * 8 {
-                *timer_start.write().unwrap() = Instant::now();
-                info!("{}: timer expired!", address);
-                let blame_message = Command::Network(network_command::NetworkCommand::Blame { socket_addr: address, view: 0, timer_expired: true });
-                let _ = blame_message.send_to(address).await;
+    // todo/fixme: this needs to change and use channels
+    if cli.view_change {
+        tokio::spawn(async move {
+            let delta = Duration::from_millis(1000);
+
+            loop {
+                if timer_start.read().unwrap().elapsed() > delta * 8 {
+                    *timer_start.write().unwrap() = Instant::now();
+                    info!("{}: timer expired!", address);
+                    let blame_message = Command::Network(lock_commit_command::NetworkCommand::Blame { socket_addr: address, view: 0, timer_expired: true });
+                    let _ = blame_message.send_to(address).await;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    });
-
+        });
+    }
     info!(
         "Node: Running on {}. Primary = {}...",
         node.socket_address,
         matches!(node.get_state(), State::Primary)
     );
-    NetworkReceiver::spawn(address, node).await.unwrap();
+    NetworkReceiver::new(address, node).run().await
+    ;
+}
 
-
+async fn send_command(socket_addr: SocketAddr, command: Command){
+    // using a reliable sender to get a response back
+    match command.send_to(socket_addr).await {
+        Ok(Some(value)) => info!("{}", value),
+        Ok(None) => info!("null"),
+        Err(error) => (warn!("ERROR {}", error)),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lib::command::ClientCommand;
     use std::fs;
+    use lib::command::ClientCommand;
     use tokio::time::{sleep, Duration};
 
     #[ctor::ctor]
@@ -88,14 +108,18 @@ mod tests {
         format!(".db_test/{}", suffix)
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test()]
     async fn test_only_primary_server() {
         let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
         let timer_start = Arc::new(RwLock::new(Instant::now()));
-        NetworkReceiver::spawn(
-            address,
-            node::Node::new(vec![address], &db_path("primary1"), address, timer_start.clone()),
-        );
+
+        tokio::spawn(async move {
+            let receiver = NetworkReceiver::new(
+                address,
+                node::Node::new(vec![address], &db_path("primary1"), address, timer_start.clone()),
+            );
+            receiver.run().await;
+        });
         sleep(Duration::from_millis(10)).await;
 
         let reply = Command::Client(ClientCommand::Get {
@@ -126,9 +150,10 @@ mod tests {
         assert_eq!("v1".to_string(), reply.unwrap());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test()]
     async fn test_replicated_server() {
         let timer_start = Arc::new(RwLock::new(Instant::now()));
+        let timer_start_secondary = Arc::new(RwLock::new(Instant::now()));
         fs::remove_dir_all(".db_test_primary2").unwrap_or_default();
         fs::remove_dir_all(".db_test_backup2").unwrap_or_default();
 
@@ -137,24 +162,32 @@ mod tests {
 
         let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
         let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
-        NetworkReceiver::spawn(
-            address_replica,
-            node::Node::new(
-                vec![address_primary, address_replica],
-                &db_path("backup2"),
+        tokio::spawn(async move {
+            let receiver = NetworkReceiver::new(
                 address_replica,
-                timer_start.clone()
-            ),
-        );
-        NetworkReceiver::spawn(
-            address_primary,
-            node::Node::new(
-                vec![address_primary, address_replica],
-                &db_path("primary2"),
+                node::Node::new(
+                    vec![address_primary, address_replica],
+                    &db_path("backup2"),
+                    address_replica,
+                    timer_start
+                ),
+            );
+            receiver.run().await;
+        });
+
+        tokio::spawn(async move {
+            let receiver = NetworkReceiver::new(
                 address_primary,
-                timer_start.clone()
-            ),
-        );
+                node::Node::new(
+                    vec![address_primary, address_replica],
+                    &db_path("primary2"),
+                    address_primary,
+                    timer_start_secondary
+                ),
+            );
+            receiver.run().await;
+        });
+
         sleep(Duration::from_millis(10)).await;
 
         // get null value

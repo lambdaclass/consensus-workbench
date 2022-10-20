@@ -7,18 +7,19 @@ use serde::{Serialize, Deserialize};
 
 use anyhow::{anyhow, Result};
 
+/// The Command enum represents any command that can be sent to the lock_commit node
+/// It can either be a ClientCommand (from the shared lib), or a NetworkCommand
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Command {
     Client(ClientCommand),
     Network(NetworkCommand),
 }
 
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum NetworkCommand {
     Propose {
         command_view: CommandView,
-    }, // todo: the address should maybe be taken from writer's sink fields? or maybe generalized in dispatch()
+    }, 
     Lock {
         socket_addr: SocketAddr,
         command_view: CommandView,
@@ -53,13 +54,6 @@ impl Command {
         response.map_err(|e| anyhow!(e))
     }
 } 
-
-
-impl fmt::Display for Command {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
 
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

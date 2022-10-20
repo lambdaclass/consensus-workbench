@@ -27,7 +27,7 @@ struct Cli {
     name: Option<String>,
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let cli = Cli::parse();
 
@@ -66,7 +66,13 @@ async fn main() {
         let db_name = db_name(&cli, "primary");
         Node::primary(&db_name)
     };
-    Receiver::spawn(address, node).await.unwrap();
+
+    tokio::spawn(async move {
+        let receiver = Receiver::new(address, node);
+        receiver.run().await;
+    })
+    .await
+    .unwrap();
 }
 
 fn db_name(cli: &Cli, default: &str) -> String {
@@ -78,8 +84,8 @@ fn db_name(cli: &Cli, default: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use lib::command::ClientCommand;
+    use std::fs;
     use tokio::time::{sleep, Duration};
 
     // since logger is meant to be initialized once and tests run in parallel,
@@ -99,10 +105,14 @@ mod tests {
         format!(".db_test/{}", suffix)
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_only_primary_server() {
         let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
-        Receiver::spawn(address, node::Node::primary(&db_path("primary1")));
+
+        tokio::spawn(async move {
+            let receiver = Receiver::new(address, node::Node::primary(&db_path("primary1")));
+            receiver.run().await;
+        });
         sleep(Duration::from_millis(10)).await;
 
         let reply = ClientCommand::Get {
@@ -133,12 +143,22 @@ mod tests {
         assert_eq!("v1".to_string(), reply.unwrap());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_replicated_server() {
+        fs::remove_dir_all(".db_test_primary2").unwrap_or_default();
+        fs::remove_dir_all(".db_test_backup2").unwrap_or_default();
+
         let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
         let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
-        Receiver::spawn(address_replica, node::Node::backup(&db_path("backup2")));
-        Receiver::spawn(address_primary, node::Node::primary(&db_path("primary2")));
+        tokio::spawn(async move {
+            let receiver = Receiver::new(address_replica, node::Node::backup(&db_path("backup2")));
+            receiver.run().await;
+        });
+        tokio::spawn(async move {
+            let receiver =
+                Receiver::new(address_primary, node::Node::primary(&db_path("primary2")));
+            receiver.run().await;
+        });
 
         // TODO: this "Subscribe" message is sent here for testing purposes.
         //       But it shouldn't be here. We should have an initialization loop

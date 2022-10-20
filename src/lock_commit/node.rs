@@ -11,13 +11,12 @@ use lib::{
     store::Store,
 };
 use log::info;
-use tokio::sync::{mpsc::Receiver, oneshot::Sender};
 use std::{
     collections::HashSet,
     net::SocketAddr,
     sync::{Arc, Mutex, RwLock}, time::Instant,
 };
-use crate::network_command::{NetworkCommand, CommandView, Command};
+use crate::lock_commit_command::{NetworkCommand, CommandView, Command};
 
 #[derive(Clone)]
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
@@ -27,6 +26,8 @@ pub struct Node {
     pub peers: Vec<SocketAddr>,
     pub sender: ReliableSender,
 
+    // fixme: shared state is wrapped in Arc<RwLock<>>s because this is cloned for every received request
+    // in the future, we want to implement a channel-based solution like in some of the other PoCs
     pub current_view: Arc<RwLock<u128>>,
     pub timer_start: Arc<RwLock<Instant>>,
     pub command_view_lock: Arc<RwLock<CommandView>>,
@@ -51,17 +52,19 @@ use State::*;
 #[async_trait]
 impl MessageHandler for Node {
     async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
-        let request: Command = bincode::deserialize(&bytes)?;
+        let request:Command = bincode::deserialize(&bytes)?;
         info!("{}: Received request {:?}", self.socket_address, &request);
 
         let state = self.get_state();
 
         let result = match (state, request) {
+            // as a 'hack': to make it simpler, we can just forward the Get command to handle_client_message
+            // if you comment this match code block, Get requests will also require quorum but it will still work
             (_, Command::Client(cmd @ ClientCommand::Get { key: _ })) => {
-                // as a 'hack': to make it simpler, we can just forward the Get command to handle_client_message
-                // if you comment this match code block, Get requests will also require quorum
                 self.handle_client_command(cmd).await
             }
+
+            // if we receive a client command that is not a get and we are primary, prepare to propose 
             (Primary, Command::Client(client_comand)) => {
                 // we advance the view according to the primary and propose it
                 let command_view = CommandView {
@@ -69,56 +72,34 @@ impl MessageHandler for Node {
                     view: *self.current_view.read().unwrap() + 1,
                 };
 
+                // since we are primary, we lock the command view
+
+                self.lock_command_view(&command_view);
+                
                 let command = NetworkCommand::Propose {
                     command_view: command_view.clone(),
                 };
-                *self.timer_start.write().unwrap() = Instant::now();
 
-                // since we are primary, we lock the command view and add it to the quorum set
-                self.lock_command_view(&command_view);
-                //self.lock_responses.clone().lock().unwrap().insert(self.socket_address);
+                *self.timer_start.write().unwrap() = Instant::now(); // for blame/view-change
 
                 info!("Received command, broadcasting Propose");
                 self.broadcast(command).await;
                 Ok(None)
             }
+
+            // Once we proposed and we receive lock requests as a Primary, we can start counting the responses
             (
                 Primary,
                 Command::Network(NetworkCommand::Lock {
                     socket_addr,
                     command_view,
                 }),
-            ) => {
-                if command_view.view <= *self.current_view.read().unwrap() {
-                    info!("Received command with an old, previously committed view, discarding");
-                    Ok(None)
-                } else {
-                    let _ = self.lock_responses.lock().unwrap().insert(socket_addr);
-                    let response_count = self.lock_responses.lock().unwrap().len();
-                    
-                    // the literature defines quorum as a function of the adversarial threshold we want to support
-                    // n > f, n > 2f, or n > 3f are the alternatives; this uses n > 2f model
-                    let quorum_count = ((self.peers.len()) / 2) + 1;
+            ) => self.handle_lock_message(socket_addr, command_view).await,
 
-                    info!("Received lock, did we get quorum? {} responses so far vs expected quorum of {} ", response_count, quorum_count);
-                    *self.timer_start.write().unwrap() = Instant::now();
-                    // broadcast commit, then try commit
-                    if response_count >= quorum_count {
-                        info!("Quorum achieved, commiting first and sending out Commit message!");
-                        self.try_commit(command_view.clone())
-                            .await
-                            .expect("Error committing command as primary");
-
-                        self.broadcast(NetworkCommand::Commit {
-                            command_view: command_view,
-                        })
-                        .await;
-                    }
-                    Ok(None)
-                }
-            }
+            // a command has been proposed and we can lock it before sending a Lock message
+            // for now this happens in the Primary as well, but that functionality could be piggy-backed in the section where we receive the command
             (_, Command::Network(NetworkCommand::Propose { command_view })) => {
-                // TODO: You should only lock if view number is expected
+                // TODO: You should only lock if view number is expected?
                 self.lock_command_view(&command_view);
                 info!(
                     "{}: View-command locked, sending out Lock message",
@@ -133,13 +114,18 @@ impl MessageHandler for Node {
                 self.send_to_primary(lock_command).await;
                 Ok(None)
             }
+
             (Backup, Command::Client(client_command)) => {
                 info!("Received client command, forwarding to primary");
 
                 self.send_to_primary(Command::Client(client_command)).await;
                 Ok(None)
             }
+
+            // for the primary, the command is committed as we reach quorum, so we can return Ok
             (Primary, Command::Network(NetworkCommand::Commit { .. })) => Ok(None),
+            
+            // the backup gets a Commit message after we reach quorum, so we can go ahead and commit
             (Backup, Command::Network(NetworkCommand::Commit { command_view })) => {
                 info!("about to try commit as a response to Commit message");
 
@@ -156,6 +142,7 @@ impl MessageHandler for Node {
                 };
                 result
             },
+            // View change moves the view/primary after enough blames were emitted
             (_, Command::Network(NetworkCommand::ViewChange { socket_addr: _, new_view , highest_lock: _})) => {
                 if new_view > *self.current_view.read().unwrap() {
                     info!("{}: View-change performed, primary is {}", self.socket_address, self.get_primary(new_view));
@@ -164,6 +151,8 @@ impl MessageHandler for Node {
                 }
                 Ok(None)
             }
+            // blames are emitted after timer expires or if 'f' nodes sent us a blame command
+            // this differentiation is so that we can make the protocol partially synchronous instead of synchronous
             (_, Command::Network(NetworkCommand::Blame {socket_addr,view, timer_expired })) => self.handle_blame(view, socket_addr, timer_expired).await,
             _ => {
                 info!("{} :unhandled command", self.socket_address);
@@ -171,7 +160,7 @@ impl MessageHandler for Node {
             }
         };
 
-        let result: Result<Option<Vec<u8>>, String> = result.map_err(|e| e.to_string()); //Ok(Some("ACK".into()));
+        let result: Result<Option<Vec<u8>>, String> = result.map_err(|e| e.to_string()); 
         let reply = bincode::serialize(&result)?;
         let _ = writer.send(reply.into()).await?;
 
@@ -194,6 +183,37 @@ impl Node {
             timer_start
         }
     }
+
+    async fn handle_lock_message(&mut self, socket_addr: SocketAddr, command_view: CommandView) ->  Result<Option<Vec<u8>>, anyhow::Error> {
+        if command_view.view <= *self.current_view.read().unwrap() {
+            info!("Received command with an old, previously committed view, discarding");
+            Ok(None)
+        } else {
+            let _ = self.lock_responses.lock().unwrap().insert(socket_addr);
+            let response_count = self.lock_responses.lock().unwrap().len();
+            
+            // the literature defines quorum as a function of the adversarial threshold we want to support
+            // n > f, n > 2f, or n > 3f are the alternatives; this uses n > 2f model
+            let quorum_count = ((self.peers.len()) / 2) + 1;
+
+            info!("Received lock, did we get quorum? {} responses so far vs expected quorum of {} ", response_count, quorum_count);
+            *self.timer_start.write().unwrap() = Instant::now();
+            // broadcast commit, then try commit
+            if response_count >= quorum_count {
+                info!("Quorum achieved, commiting first and sending out Commit message!");
+                self.try_commit(command_view.clone())
+                    .await
+                    .expect("Error committing command as primary");
+
+                self.broadcast(NetworkCommand::Commit {
+                    command_view: command_view,
+                })
+                .await;
+            }
+            Ok(None)
+    }
+}
+
 
     async fn handle_client_command(
         &self,
@@ -236,7 +256,6 @@ impl Node {
 
     async fn send_to_primary(&mut self, cmd: Command) {
         let message: Bytes = bincode::serialize(&cmd).unwrap().into();
-
         let primary_address = *(self.get_primary(*self.current_view.read().unwrap()));
 
         // forward the command to all replicas and wait for them to respond
@@ -316,7 +335,6 @@ impl Node {
         let _ = self.blame_messages.lock().unwrap().insert(socket_addr);
         let blame_count = self.blame_messages.lock().unwrap().len();
         
-
         let highest_view_lock = (self.command_view_lock.read().unwrap()).clone();
 
         // from the docs, f is the amount of omission failures we want to tolerate

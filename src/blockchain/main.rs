@@ -91,7 +91,7 @@ impl MessageHandler for NodeReceiverHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lib::command::Command;
+    use lib::command::ClientCommand;
     use tokio_retry::strategy::FixedInterval;
     use tokio_retry::Retry;
 
@@ -108,7 +108,7 @@ mod tests {
         spawn_node_tasks(address, None).await;
 
         // get k1 -> null
-        let reply = Command::Get {
+        let reply = ClientCommand::Get {
             key: "k1".to_string(),
         }
         .send_to(address)
@@ -117,7 +117,7 @@ mod tests {
         assert!(reply.is_none());
 
         // set k1
-        let reply = Command::Set {
+        let reply = ClientCommand::Set {
             key: "k1".to_string(),
             value: "v1".to_string(),
         }
@@ -140,7 +140,7 @@ mod tests {
         spawn_node_tasks(address2, Some(address1)).await;
         spawn_node_tasks(address3, Some(address1)).await;
 
-        Command::Set {
+        ClientCommand::Set {
             key: "k1".to_string(),
             value: "v1".to_string(),
         }
@@ -154,7 +154,7 @@ mod tests {
         assert_eventually_equals(address3, "k1", "v1").await;
 
         // set k=v2 (another node) -> eventually v2 in 1
-        Command::Set {
+        ClientCommand::Set {
             key: "k1".to_string(),
             value: "v2".to_string(),
         }
@@ -174,7 +174,7 @@ mod tests {
         spawn_node_tasks(address1, None).await;
         spawn_node_tasks(address2, Some(address1)).await;
 
-        Command::Set {
+        ClientCommand::Set {
             key: "k1".to_string(),
             value: "v1".to_string(),
         }
@@ -187,7 +187,7 @@ mod tests {
         assert_eventually_equals(address2, "k1", "v1").await;
 
         // set k=v2 (another node) -> eventually v2 in 1
-        Command::Set {
+        ClientCommand::Set {
             key: "k1".to_string(),
             value: "v2".to_string(),
         }
@@ -214,7 +214,7 @@ mod tests {
         let (network_handle, node_handle) = spawn_node_tasks(address2, Some(address1)).await;
         spawn_node_tasks(address3, Some(address1)).await;
 
-        Command::Set {
+        ClientCommand::Set {
             key: "k1".to_string(),
             value: "v1".to_string(),
         }
@@ -232,7 +232,7 @@ mod tests {
         node_handle.abort();
 
         // send another transaction
-        Command::Set {
+        ClientCommand::Set {
             key: "k1".to_string(),
             value: "v2".to_string(),
         }
@@ -248,7 +248,7 @@ mod tests {
         spawn_node_tasks(address2, Some(address1)).await;
 
         // send a new transaction to the fresh right away
-        Command::Set {
+        ClientCommand::Set {
             key: "k1".to_string(),
             value: "v3".to_string(),
         }
@@ -267,7 +267,7 @@ mod tests {
     async fn assert_eventually_equals(address: SocketAddr, key: &str, value: &str) {
         let retries = FixedInterval::from_millis(100).take(200);
         let reply = Retry::spawn(retries, || async {
-            let reply = Command::Get {
+            let reply = ClientCommand::Get {
                 key: key.to_string(),
             }
             .send_to(address)
