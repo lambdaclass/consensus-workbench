@@ -7,10 +7,12 @@ use itertools::Itertools;
 
 use lib::command::Command;
 use log::{debug, warn};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const DIFFICULTY_PREFIX: &str = "0000";
+// The more zeroes starting from the left, the higher the difficulty
+const DIFFICULTY_TARGET: u32 = 0b00000000_00000000_00111111_11111111;
 
 pub type TransactionId = String;
 pub type Transaction = (TransactionId, Command);
@@ -46,13 +48,17 @@ impl Block {
     pub fn genesis() -> Self {
         // using ugly placeholder values for genesis, maybe there are better ones
         let data = vec![];
+        // We use a random initial nonce so different nodes start at different values
+        // If they all start at the same value they will take the same amount of time
+        // to mine a block.
+        let initial_nonce = rand::thread_rng().gen_range(0, 100000000);
         let mut block = Self {
             height: 0,
             miner_id: "god".to_string(),
             previous_hash: "genesis".to_string(),
             hash: "temporary".to_string(),
             data,
-            nonce: 0,
+            nonce: initial_nonce,
         };
         block.hash = block.calculate_hash();
 
@@ -62,7 +68,8 @@ impl Block {
     /// Returns if this is a valid node: if its hash attribute matches the result of hashing the block data
     /// and meets the difficulty prefix (the amount of leading zeros) for the proof of work.
     fn is_valid(&self) -> bool {
-        if !self.hash.starts_with(DIFFICULTY_PREFIX) {
+        if !is_below_difficulty_target(&hex::decode(self.hash.clone()).unwrap(), DIFFICULTY_TARGET)
+        {
             warn!("block has invalid difficulty {}", self.hash);
             return false;
         } else if self.calculate_hash() != self.hash {
@@ -193,7 +200,10 @@ impl Ledger {
                 debug!("nonce: {}", candidate.nonce);
             }
             candidate.hash = candidate.calculate_hash();
-            if candidate.hash.starts_with(DIFFICULTY_PREFIX) {
+            if is_below_difficulty_target(
+                &hex::decode(candidate.hash.clone()).unwrap(),
+                DIFFICULTY_TARGET,
+            ) {
                 debug!(
                     "mined! nonce: {}, hash: {}",
                     candidate.nonce, candidate.hash
@@ -215,6 +225,15 @@ impl Display for Ledger {
             self.blocks.last().unwrap()
         )
     }
+}
+
+fn is_below_difficulty_target(hash: &[u8], target: u32) -> bool {
+    let first_four_bytes = u32::from(hash[0])
+        + (u32::from(hash[1]) << 8)
+        + (u32::from(hash[2]) << 16)
+        + (u32::from(hash[3]) << 24);
+
+    return first_four_bytes < target;
 }
 
 #[cfg(test)]
