@@ -250,7 +250,6 @@ fn is_below_difficulty_target(hash: &str) -> Result<bool> {
 
     Ok(first_four_bytes < DIFFICULTY_TARGET)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
