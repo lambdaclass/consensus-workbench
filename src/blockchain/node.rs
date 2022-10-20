@@ -18,7 +18,7 @@ use lib::command::Command as ClientCommand;
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Message {
     /// A client transaction either received directly from the client or forwarded by a peer.
-    Command(String, ClientCommand),
+    Command(TransactionId, ClientCommand),
 
     /// A request from a node to its seed to get it's current ledger.
     GetState { reply_to: SocketAddr },
@@ -48,7 +48,7 @@ pub struct Node {
     sender: SimpleSender,
 
     /// The pool of pending transactions. The miner task will draw from this pool to include in blocks.
-    mempool: HashMap<String, ClientCommand>,
+    mempool: HashMap<TransactionId, ClientCommand>,
 
     /// The blockchain of committed transactions.
     ledger: Ledger,
@@ -67,7 +67,7 @@ pub struct Node {
 use ClientCommand::*;
 use Message::*;
 
-use crate::ledger::{Block, Ledger};
+use crate::ledger::{Block, Ledger, TransactionId};
 
 impl Node {
     /// Initialize the node attributes. It doesn't run it nor starts mining.
@@ -117,6 +117,10 @@ impl Node {
                 }
                 Some((message, reply_sender)) = network_receiver.recv() => {
                     let result = self.handle_message(message.clone()).await;
+
+                    // FIXME we only send non-empty replies to clients here.
+                    // the network peer messages are done inside the handle_message function instead
+                    // this may be improved by separating the network and client listeners
                     if let Err(error) = reply_sender.send(result) {
                         error!("failed to send message {:?} response {:?}", message, error);
                     };
@@ -142,7 +146,6 @@ impl Node {
             // the transaction and any winning chain includes it).
             Command(txid, Set { value, key }) => {
                 if self.mempool.contains_key(&txid) || self.ledger.contains(&txid) {
-                    // TODO consider this case in tests
                     debug!("skipping already seen transaction {}", txid);
                     Ok(None)
                 } else {
@@ -210,7 +213,6 @@ impl Node {
     async fn update_ledger(&mut self, ledger: Ledger) {
         self.ledger = ledger;
 
-        // TODO this should be tested
         // remove committed transactions from the mempool
         self.mempool.retain(|k, _| !self.ledger.contains(k));
 
@@ -231,9 +233,10 @@ impl Node {
         let previous_block = self.ledger.blocks.last().unwrap().clone();
         let transactions = self.mempool.clone().into_iter().collect();
         let sender = self.miner_sender.clone();
+        let miner_id = self.address.to_string();
         self.miner_task.abort();
         self.miner_task = tokio::spawn(async move {
-            let new_block = Ledger::mine_block(previous_block, transactions);
+            let new_block = Ledger::mine_block(&miner_id, previous_block, transactions);
             if let Err(err) = sender.send(new_block).await {
                 error!("error sending mined block {}", err);
             }
@@ -301,18 +304,127 @@ fn serialize<T: Serialize + fmt::Debug>(message: &T) -> Option<Bytes> {
 
 #[cfg(test)]
 mod tests {
-    #[tokio::test]
-    async fn set_command() {
-        // if already in ledger ignore
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn transactions() {
+        let address: SocketAddr = "127.0.0.1:6279".parse().unwrap();
+        let mut node = Node::new(address, None);
+
+        // send a new transaction to the ledger -> adds it to the mempool
+        let tx1 = Command(
+            "tx1".to_string(),
+            ClientCommand::Set {
+                key: "key".to_string(),
+                value: "value".to_string(),
+            },
+        );
+
+        node.handle_message(tx1.clone()).await.unwrap();
+        assert_eq!(1, node.mempool.len());
+        assert!(node.mempool.contains_key("tx1"));
+
         // if already in mempool ignore
-        // else add to mempool
+        node.handle_message(tx1.clone()).await.unwrap();
+        assert_eq!(1, node.mempool.len());
+        assert!(node.mempool.contains_key("tx1"));
+
+        // same operation with different transaction id is considered different
+        let tx2 = Command(
+            "tx2".to_string(),
+            ClientCommand::Set {
+                key: "key".to_string(),
+                value: "value".to_string(),
+            },
+        );
+        node.handle_message(tx2.clone()).await.unwrap();
+        assert_eq!(2, node.mempool.len());
+        assert!(node.mempool.contains_key("tx2"));
+
+        // don't include a transaction in the mempool if it's already in the ledger
+        node.restart_miner();
+        let block = node.miner_receiver.recv().await.unwrap();
+        let new_ledger = node.ledger.extend(block).unwrap();
+        node.update_ledger(new_ledger).await;
+        assert_eq!(0, node.mempool.len());
+        assert!(node.ledger.contains("tx2"));
+        node.handle_message(tx2.clone()).await.unwrap();
+        assert_eq!(0, node.mempool.len());
     }
 
-    #[tokio::test]
-    async fn state() {
-        // if ledger is shorter ignore
-        // if ledger is valid and longer replace current one
-        // transactions are removed from mempool
-        // if ledger is invalid ignore
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ledger_update() {
+        let address1: SocketAddr = "127.0.0.1:6279".parse().unwrap();
+        let mut node1 = Node::new(address1, None);
+
+        let address2: SocketAddr = "127.0.0.1:6280".parse().unwrap();
+        let mut node2 = Node::new(address2, None);
+
+        // if an invalid ledger is received ignore
+        assert_eq!(1, node1.ledger.blocks.len());
+        let mut invalid_ledger = node1.ledger.clone();
+        invalid_ledger.blocks.push(Block::genesis());
+        invalid_ledger.blocks.push(Block::genesis());
+        assert_eq!(3, invalid_ledger.blocks.len());
+
+        let invalid_message = Message::State {
+            peers: HashSet::new(),
+            from: address2,
+            ledger: invalid_ledger,
+        };
+        node1.handle_message(invalid_message).await.unwrap();
+        // learns the new peer
+        assert!(node1.peers.contains(&address2));
+        // ignores the ledger
+        assert_eq!(1, node1.ledger.blocks.len());
+
+        // mine a block in one of the nodes
+        node1.restart_miner();
+        let block = node1.miner_receiver.recv().await.unwrap();
+        let new_ledger = node1.ledger.extend(block).unwrap();
+        node1.update_ledger(new_ledger.clone()).await;
+        assert_eq!(2, node1.ledger.blocks.len());
+
+        // send to the other node. accepted because it's valid and longer
+        let valid_message = Message::State {
+            peers: HashSet::new(),
+            from: address1,
+            ledger: new_ledger,
+        };
+        node2.handle_message(valid_message).await.unwrap();
+        assert!(node2.peers.contains(&address1));
+        assert_eq!(2, node1.ledger.blocks.len());
+
+        // mine a new block in both
+        let block = node1.miner_receiver.recv().await.unwrap();
+        let new_ledger = node1.ledger.extend(block).unwrap();
+        node1.update_ledger(new_ledger.clone()).await;
+        assert_eq!(3, node1.ledger.blocks.len());
+        assert_eq!(
+            address1.to_string(),
+            node1.ledger.blocks.last().unwrap().miner_id
+        );
+
+        let block = node2.miner_receiver.recv().await.unwrap();
+        let new_ledger2 = node2.ledger.extend(block).unwrap();
+        node2.update_ledger(new_ledger2.clone()).await;
+        assert_eq!(3, node2.ledger.blocks.len());
+        assert_eq!(
+            address2.to_string(),
+            node2.ledger.blocks.last().unwrap().miner_id
+        );
+
+        // send one to the other. ignored because the chain isn't longer
+        let valid_message = Message::State {
+            peers: HashSet::new(),
+            from: address2,
+            ledger: new_ledger2,
+        };
+        node1.handle_message(valid_message).await.unwrap();
+        assert_eq!(3, node1.ledger.blocks.len());
+        assert_eq!(
+            address1.to_string(),
+            node1.ledger.blocks.last().unwrap().miner_id
+        );
     }
 }

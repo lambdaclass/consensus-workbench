@@ -10,32 +10,36 @@ use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const DIFFICULTY_PREFIX: &str = "00";
+const DIFFICULTY_PREFIX: &str = "0000";
 
-// TODO add type alias for txid and transaction
+pub type TransactionId = String;
+pub type Transaction = (TransactionId, Command);
 
-// TODO consider adding height
-// TODO consider adding miner node
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Block {
-    pub hash: String,
-    pub previous_hash: String,
-    pub data: Vec<(String, Command)>,
-    pub nonce: u64,
+    pub miner_id: String,
+    height: u64,
+    hash: String,
+    previous_hash: String,
+    data: Vec<Transaction>,
+    nonce: u64,
 }
 
 impl Block {
-    // FIXME what's the point of using vec here instead of the string only?
-    /// TODO
-    pub fn calculate_hash(&self) -> Vec<u8> {
+    /// Generate a hex string of a Sha256 hash for the attributes in this block.
+    /// The hash field itself doesn't affect the result.
+    pub fn calculate_hash(&self) -> String {
         let mut hasher = Sha256::new();
+        hasher.update(&self.height.to_string());
+        hasher.update(&self.miner_id);
         hasher.update(&self.previous_hash);
         hasher.update(self.nonce.to_string());
         for (txid, cmd) in &self.data {
             hasher.update(txid);
             hasher.update(cmd.to_string());
         }
-        hasher.finalize().as_slice().to_owned()
+        let hash = hasher.finalize().as_slice().to_owned();
+        hex::encode(hash)
     }
 
     /// Create a genesis block, which is expected to be the first block of any valid ledger.
@@ -43,12 +47,14 @@ impl Block {
         // using ugly placeholder values for genesis, maybe there are better ones
         let data = vec![];
         let mut block = Self {
+            height: 0,
+            miner_id: "god".to_string(),
             previous_hash: "genesis".to_string(),
             hash: "temporary".to_string(),
             data,
             nonce: 0,
         };
-        block.hash = hex::encode(block.calculate_hash());
+        block.hash = block.calculate_hash();
 
         block
     }
@@ -56,16 +62,10 @@ impl Block {
     /// Returns if this is a valid node: if its hash attribute matches the result of hashing the block data
     /// and meets the difficulty prefix (the amount of leading zeros) for the proof of work.
     fn is_valid(&self) -> bool {
-        let decoded_hash = hex::decode(&self.hash);
-        if decoded_hash.is_err() {
-            warn!("block hash couldn't be decoded from hex {}", self.hash);
-            return false;
-        }
-
-        if !hash_to_binary_representation(&decoded_hash.unwrap()).starts_with(DIFFICULTY_PREFIX) {
+        if !self.hash.starts_with(DIFFICULTY_PREFIX) {
             warn!("block has invalid difficulty {}", self.hash);
             return false;
-        } else if hex::encode(self.calculate_hash()) != self.hash {
+        } else if self.calculate_hash() != self.hash {
             warn!("block has invalid hash {}", self.hash);
             return false;
         }
@@ -78,6 +78,14 @@ impl Block {
             warn!(
                 "block has wrong previous hash {}, expected {}",
                 self.previous_hash, other.hash
+            );
+            return false;
+        }
+        if self.height != other.height + 1 {
+            warn!(
+                "block has wrong height {}, expected {}",
+                self.height,
+                other.height + 1
             );
             return false;
         }
@@ -165,9 +173,15 @@ impl Ledger {
     /// --- the amount of leading zeros in the hash that is the proof of work.
     /// Note that the transactions are assumed to be safe for inclusion in the block, no duplicate
     /// checks are run here.
-    pub fn mine_block(previous_block: Block, transactions: Vec<(String, Command)>) -> Block {
+    pub fn mine_block(
+        miner_id: &str,
+        previous_block: Block,
+        transactions: Vec<Transaction>,
+    ) -> Block {
         debug!("mining block...");
         let mut candidate = Block {
+            height: previous_block.height + 1,
+            miner_id: miner_id.to_string(),
             previous_hash: previous_block.hash,
             hash: "not known yet".to_string(),
             data: transactions,
@@ -178,13 +192,11 @@ impl Ledger {
             if candidate.nonce % Self::MINER_LOG_EVERY == 0 {
                 debug!("nonce: {}", candidate.nonce);
             }
-            let hash = candidate.calculate_hash();
-            candidate.hash = hex::encode(&hash);
-            let binary_hash = hash_to_binary_representation(&hash);
-            if binary_hash.starts_with(DIFFICULTY_PREFIX) {
+            candidate.hash = candidate.calculate_hash();
+            if candidate.hash.starts_with(DIFFICULTY_PREFIX) {
                 debug!(
-                    "mined! nonce: {}, hash: {}, binary hash: {}",
-                    candidate.nonce, candidate.hash, binary_hash
+                    "mined! nonce: {}, hash: {}",
+                    candidate.nonce, candidate.hash
                 );
 
                 return candidate;
@@ -205,14 +217,6 @@ impl Display for Ledger {
     }
 }
 
-fn hash_to_binary_representation(hash: &[u8]) -> String {
-    let mut res: String = String::default();
-    for c in hash {
-        res.push_str(&format!("{:b}", c));
-    }
-    res
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,6 +226,8 @@ mod tests {
         // test that each of the block attributes contributes to the hash
         // (not the hash value itself)
         let mut block = Block {
+            height: 1,
+            miner_id: "127.0.0.1:6100".to_string(),
             hash: "temporary hash".to_string(),
             previous_hash: Block::genesis().hash,
             data: vec![],
@@ -270,18 +276,26 @@ mod tests {
     async fn block_validation() {
         let genesis = Block::genesis();
         let mut block = Block {
+            height: 1,
+            miner_id: "127.0.0.1:6100".to_string(),
             previous_hash: genesis.hash.to_string(),
             hash: "invalid".to_string(),
             data: vec![],
-            nonce: 919,
+            nonce: 417843,
         };
 
         assert!(block.extends(&genesis));
 
+        // height is not the next from the previous block
+        block.height = 10;
+        assert!(!block.extends(&genesis));
+        // restore
+        block.height = 1;
+
         // hash is invalid hex
         assert!(!block.is_valid());
 
-        block.hash = hex::encode(block.calculate_hash());
+        block.hash = block.calculate_hash();
         assert!(block.is_valid());
         assert!(block.extends(&genesis));
 
@@ -290,7 +304,7 @@ mod tests {
         assert!(!block.is_valid());
 
         // hash is valid but doesn't meet proof of work
-        block.hash = hex::encode(block.calculate_hash());
+        block.hash = block.calculate_hash();
         assert!(!block.is_valid());
     }
 
@@ -302,10 +316,12 @@ mod tests {
 
         // extend with valid block
         let block = Block {
+            height: 1,
+            miner_id: "127.0.0.1:6100".to_string(),
             previous_hash: Block::genesis().hash.to_string(),
-            hash: "00009c985d0019b01d8c0f865c32c4af76f6aa9216c361d843bfc0849598376a".to_string(),
+            hash: "0000c6c07082f30f572ddc571c4556566abe77cb8884c4cfad517c0db975c31b".to_string(),
             data: vec![],
-            nonce: 919,
+            nonce: 417843,
         };
 
         let ledger = ledger.extend(block.clone()).unwrap();
@@ -319,10 +335,12 @@ mod tests {
     async fn ledger_validation() {
         // a valid block that extends genesis
         let mut block = Block {
+            height: 1,
+            miner_id: "127.0.0.1:6100".to_string(),
             previous_hash: Block::genesis().hash.to_string(),
-            hash: "00009c985d0019b01d8c0f865c32c4af76f6aa9216c361d843bfc0849598376a".to_string(),
+            hash: "0000c6c07082f30f572ddc571c4556566abe77cb8884c4cfad517c0db975c31b".to_string(),
             data: vec![],
-            nonce: 919,
+            nonce: 417843,
         };
 
         let mut ledger = Ledger::new();
@@ -360,7 +378,7 @@ mod tests {
                 value: "value".to_string(),
             },
         );
-        let new_block = Ledger::mine_block(genesis.clone(), vec![transaction]);
+        let new_block = Ledger::mine_block("127.0.0.1:6100", genesis.clone(), vec![transaction]);
         assert!(new_block.is_valid());
         assert!(new_block.extends(&genesis));
 
@@ -377,7 +395,8 @@ mod tests {
                 value: "another".to_string(),
             },
         );
-        let new_new_block = Ledger::mine_block(new_block.clone(), vec![transaction]);
+        let new_new_block =
+            Ledger::mine_block("127.0.0.1:6100", new_block.clone(), vec![transaction]);
         assert!(new_new_block.is_valid());
         assert!(new_new_block.extends(&new_block));
 
