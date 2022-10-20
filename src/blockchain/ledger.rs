@@ -12,7 +12,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 // The more zeroes starting from the left, the higher the difficulty
-const DIFFICULTY_TARGET: u32 = 0b00000000_00000000_00111111_11111111;
+const DIFFICULTY_TARGET: u32 = if cfg!(test) {
+    // Lower the difficulty for testing so it doesn't take very long
+    0b00000000_00000000_11111111_11111111
+} else {
+    0b00000000_00000000_00111111_11111111
+};
 
 pub type TransactionId = String;
 pub type Transaction = (TransactionId, Command);
@@ -51,14 +56,13 @@ impl Block {
         // We use a random initial nonce so different nodes start at different values
         // If they all start at the same value they will take the same amount of time
         // to mine a block.
-        let initial_nonce = rand::thread_rng().gen_range(0, 100000000);
         let mut block = Self {
             height: 0,
             miner_id: "god".to_string(),
             previous_hash: "genesis".to_string(),
             hash: "temporary".to_string(),
             data,
-            nonce: initial_nonce,
+            nonce: 0,
         };
         block.hash = block.calculate_hash();
 
@@ -68,10 +72,19 @@ impl Block {
     /// Returns if this is a valid node: if its hash attribute matches the result of hashing the block data
     /// and meets the difficulty prefix (the amount of leading zeros) for the proof of work.
     fn is_valid(&self) -> bool {
-        if !is_below_difficulty_target(&self.hash) {
-            warn!("block has invalid difficulty {}", self.hash);
-            return false;
-        } else if self.calculate_hash() != self.hash {
+        match is_below_difficulty_target(&self.hash) {
+            Ok(false) => {
+                warn!("block has invalid difficulty {}", self.hash);
+                return false;
+            }
+            Err(_) => {
+                warn!("block has malformed hash {}", self.hash);
+                return false;
+            }
+            Ok(true) => {}
+        }
+
+        if self.calculate_hash() != self.hash {
             warn!("block has invalid hash {}", self.hash);
             return false;
         }
@@ -185,13 +198,14 @@ impl Ledger {
         transactions: Vec<Transaction>,
     ) -> Block {
         debug!("mining block...");
+        let initial_nonce = rand::thread_rng().gen_range(0, 100000000);
         let mut candidate = Block {
             height: previous_block.height + 1,
             miner_id: miner_id.to_string(),
             previous_hash: previous_block.hash,
             hash: "not known yet".to_string(),
             data: transactions,
-            nonce: 0,
+            nonce: initial_nonce,
         };
 
         loop {
@@ -199,7 +213,9 @@ impl Ledger {
                 debug!("nonce: {}", candidate.nonce);
             }
             candidate.hash = candidate.calculate_hash();
-            if is_below_difficulty_target(&candidate.hash) {
+            // I'm unwrapping because the only posible error is `candidate.hash` not
+            // being a valid hexstring, and that's not possible here.
+            if is_below_difficulty_target(&candidate.hash).unwrap() {
                 debug!(
                     "mined! nonce: {}, hash: {}",
                     candidate.nonce, candidate.hash
@@ -223,14 +239,14 @@ impl Display for Ledger {
     }
 }
 
-fn is_below_difficulty_target(hash: &str) -> bool {
-    let hash_bytes = hex::decode(hash).unwrap();
+fn is_below_difficulty_target(hash: &str) -> Result<bool> {
+    let hash_bytes = hex::decode(hash)?;
     let first_four_bytes = u32::from(hash_bytes[0])
         + (u32::from(hash_bytes[1]) << 8)
         + (u32::from(hash_bytes[2]) << 16)
         + (u32::from(hash_bytes[3]) << 24);
 
-    return first_four_bytes < DIFFICULTY_TARGET;
+    return Ok(first_four_bytes < DIFFICULTY_TARGET);
 }
 
 #[cfg(test)]
@@ -297,7 +313,7 @@ mod tests {
             previous_hash: genesis.hash.to_string(),
             hash: "invalid".to_string(),
             data: vec![],
-            nonce: 417843,
+            nonce: 67048562,
         };
 
         assert!(block.extends(&genesis));
@@ -335,9 +351,9 @@ mod tests {
             height: 1,
             miner_id: "127.0.0.1:6100".to_string(),
             previous_hash: Block::genesis().hash.to_string(),
-            hash: "0000c6c07082f30f572ddc571c4556566abe77cb8884c4cfad517c0db975c31b".to_string(),
+            hash: "ad260000963facb4d34b6b503d01beba7c58edaf6176b46ca92db75592cd8cf0".to_string(),
             data: vec![],
-            nonce: 417843,
+            nonce: 67048562,
         };
 
         let ledger = ledger.extend(block.clone()).unwrap();
@@ -354,9 +370,9 @@ mod tests {
             height: 1,
             miner_id: "127.0.0.1:6100".to_string(),
             previous_hash: Block::genesis().hash.to_string(),
-            hash: "0000c6c07082f30f572ddc571c4556566abe77cb8884c4cfad517c0db975c31b".to_string(),
+            hash: "ad260000963facb4d34b6b503d01beba7c58edaf6176b46ca92db75592cd8cf0".to_string(),
             data: vec![],
-            nonce: 417843,
+            nonce: 67048562,
         };
 
         let mut ledger = Ledger::new();
