@@ -241,6 +241,11 @@ impl Display for Ledger {
     }
 }
 
+/// Returns whether the first four bytes of a given hash, when
+/// expressed as a 32 bit unsigned integer, are less than the
+/// the difficulty target or not. In practice, because we express the
+/// difficulty target as a number consisting of n zeroes followed by
+/// (32 - n) ones, what we are checking is if the first n bits are zero.
 fn is_below_difficulty_target(hash: &str) -> Result<bool> {
     let hash_bytes = hex::decode(hash)?;
     let first_four_bytes = u32::from(hash_bytes[0])
