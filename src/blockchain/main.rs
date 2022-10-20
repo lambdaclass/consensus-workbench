@@ -38,11 +38,7 @@ async fn main() {
 
     info!("Node socket: {}:{}", cli.address, cli.port);
 
-    simple_logger::SimpleLogger::new()
-        .env()
-        .with_level(log::LevelFilter::Info)
-        .init()
-        .unwrap();
+    simple_logger::SimpleLogger::new().env().init().unwrap();
 
     let address = SocketAddr::new(cli.address, cli.port);
 
@@ -103,11 +99,7 @@ mod tests {
     // run this before anything because otherwise it errors out
     #[ctor::ctor]
     fn init() {
-        simple_logger::SimpleLogger::new()
-            .env()
-            .with_level(log::LevelFilter::Info)
-            .init()
-            .unwrap();
+        simple_logger::SimpleLogger::new().env().init().unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
