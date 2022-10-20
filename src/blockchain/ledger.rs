@@ -17,8 +17,8 @@ pub type Transaction = (TransactionId, Command);
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Block {
+    pub miner_id: String,
     height: u64,
-    miner_id: String,
     hash: String,
     previous_hash: String,
     data: Vec<Transaction>,

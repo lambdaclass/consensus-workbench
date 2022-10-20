@@ -341,7 +341,7 @@ mod tests {
         assert_eq!(2, node.mempool.len());
         assert!(node.mempool.contains_key("tx2"));
 
-        // don't inlcude a transaction in the mempool if it's already in the ledger
+        // don't include a transaction in the mempool if it's already in the ledger
         node.restart_miner();
         let block = node.miner_receiver.recv().await.unwrap();
         let new_ledger = node.ledger.extend(block).unwrap();
@@ -353,10 +353,78 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn ledger() {
-        // if ledger is shorter ignore
-        // if ledger is valid and longer replace current one
-        // transactions are removed from mempool
-        // if ledger is invalid ignore
+    async fn ledger_update() {
+        let address1: SocketAddr = "127.0.0.1:6279".parse().unwrap();
+        let mut node1 = Node::new(address1, None);
+
+        let address2: SocketAddr = "127.0.0.1:6280".parse().unwrap();
+        let mut node2 = Node::new(address2, None);
+
+        // if an invalid ledger is received ignore
+        assert_eq!(1, node1.ledger.blocks.len());
+        let mut invalid_ledger = node1.ledger.clone();
+        invalid_ledger.blocks.push(Block::genesis());
+        invalid_ledger.blocks.push(Block::genesis());
+        assert_eq!(3, invalid_ledger.blocks.len());
+
+        let invalid_message = Message::State {
+            peers: HashSet::new(),
+            from: address2,
+            ledger: invalid_ledger,
+        };
+        node1.handle_message(invalid_message).await.unwrap();
+        // learns the new peer
+        assert!(node1.peers.contains(&address2));
+        // ignores the ledger
+        assert_eq!(1, node1.ledger.blocks.len());
+
+        // mine a block in one of the nodes
+        node1.restart_miner();
+        let block = node1.miner_receiver.recv().await.unwrap();
+        let new_ledger = node1.ledger.extend(block).unwrap();
+        node1.update_ledger(new_ledger.clone()).await;
+        assert_eq!(2, node1.ledger.blocks.len());
+
+        // send to the other node. accepted because it's valid and longer
+        let valid_message = Message::State {
+            peers: HashSet::new(),
+            from: address1,
+            ledger: new_ledger,
+        };
+        node2.handle_message(valid_message).await.unwrap();
+        assert!(node2.peers.contains(&address1));
+        assert_eq!(2, node1.ledger.blocks.len());
+
+        // mine a new block in both
+        let block = node1.miner_receiver.recv().await.unwrap();
+        let new_ledger = node1.ledger.extend(block).unwrap();
+        node1.update_ledger(new_ledger.clone()).await;
+        assert_eq!(3, node1.ledger.blocks.len());
+        assert_eq!(
+            address1.to_string(),
+            node1.ledger.blocks.last().unwrap().miner_id
+        );
+
+        let block = node2.miner_receiver.recv().await.unwrap();
+        let new_ledger2 = node2.ledger.extend(block).unwrap();
+        node2.update_ledger(new_ledger2.clone()).await;
+        assert_eq!(3, node2.ledger.blocks.len());
+        assert_eq!(
+            address2.to_string(),
+            node2.ledger.blocks.last().unwrap().miner_id
+        );
+
+        // send one to the other. ignored because the chain isn't longer
+        let valid_message = Message::State {
+            peers: HashSet::new(),
+            from: address2,
+            ledger: new_ledger2,
+        };
+        node1.handle_message(valid_message).await.unwrap();
+        assert_eq!(3, node1.ledger.blocks.len());
+        assert_eq!(
+            address1.to_string(),
+            node1.ledger.blocks.last().unwrap().miner_id
+        );
     }
 }
