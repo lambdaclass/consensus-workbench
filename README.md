@@ -3,7 +3,7 @@ Proof of concept Rust implementations for various distributed systems protocols.
 
 ## Example usage
 
-    # run a single echo server
+    # run a single-node server
     cargo run --bin single_node
 
     # on a separate shell, send key/value commands to the server
@@ -12,7 +12,11 @@ Proof of concept Rust implementations for various distributed systems protocols.
 
 The default log level is `INFO`, to change it set the `RUST_LOG` environment variable before running. Possible values are `OFF`, `ERROR`, `WARN`, `INFO`, `DEBUG` and `TRACE`.
 
+See the specific implementation directories for details on how to run each of them.
+
 ## Implementations
+
+Each sub-directory contains an implementation of a key/value store with specific replication or consensus strategies.
 
 1. [Single node server](/src/single_node)
 1. [Primary/backup server](/src/primary_backup)
@@ -25,3 +29,9 @@ The default log level is `INFO`, to change it set the `RUST_LOG` environment var
 5. HotStuff (TODO)
 6. Narwhal+Tusk (TODO)
 6. Narwhal+Bullshark (TODO)
+
+## Acknowledgments
+
+- The network and store modules of this projects were originally copied from [asonnino/hotstuff](https://github.com/asonnino/hotstuff) and are under the Apache license.
+- The ledger module in the blockchain implementation was originally based on [this tutorial](https://blog.logrocket.com/how-to-build-a-blockchain-in-rust/).
+- Some of the algorithms were based on guides from the [Decentralized Thoughts](https://decentralizedthoughts.github.io/) blog.
