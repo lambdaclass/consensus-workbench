@@ -10,6 +10,8 @@ Proof of concept Rust implementations for various distributed systems protocols.
     cargo run --bin client -- set v1 hello
     cargo run --bin client -- get v1
 
+The default log level is `INFO`, to change it set the `RUST_LOG` environment variable before running. Possible values are `OFF`, `ERROR`, `WARN`, `INFO`, `DEBUG` and `TRACE`.
+
 ## Implementations
 
 1. [Single node server](/src/single_node)
