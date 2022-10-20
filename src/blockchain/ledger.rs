@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 
 // Difficulty is expressed as the maximum u32 unsigned integer shifted a number of
 // bits to the right. This way, a difficulty of u32::MAX >> n means "the hash has
-// to start with  n zeroes". The higher the n, the higher difficulty.
+// to start with n zeroes". The higher the n, the higher the difficulty.
 const DIFFICULTY_TARGET: u32 = if cfg!(test) {
     // Lower the difficulty for testing so it doesn't take very long
     u32::MAX >> 16
