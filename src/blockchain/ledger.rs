@@ -194,7 +194,7 @@ impl Ledger {
     /// --- the amount of leading zeros in the hash that is the proof of work.
     /// Note that the transactions are assumed to be safe for inclusion in the block, no duplicate
     /// checks are run here.
-    pub fn mine_block(
+    pub async fn mine_block(
         miner_id: &str,
         previous_block: Block,
         transactions: Vec<Transaction>,
@@ -213,6 +213,7 @@ impl Ledger {
         loop {
             if candidate.nonce % Self::MINER_LOG_EVERY == 0 {
                 debug!("nonce: {}", candidate.nonce);
+                tokio::task::yield_now().await;
             }
             candidate.hash = candidate.calculate_hash();
             // I'm unwrapping because the only posible error is `candidate.hash` not
@@ -416,7 +417,8 @@ mod tests {
                 value: "value".to_string(),
             },
         );
-        let new_block = Ledger::mine_block("127.0.0.1:6100", genesis.clone(), vec![transaction]);
+        let new_block =
+            Ledger::mine_block("127.0.0.1:6100", genesis.clone(), vec![transaction]).await;
         assert!(new_block.is_valid());
         assert!(new_block.extends(&genesis));
 
@@ -434,7 +436,7 @@ mod tests {
             },
         );
         let new_new_block =
-            Ledger::mine_block("127.0.0.1:6100", new_block.clone(), vec![transaction]);
+            Ledger::mine_block("127.0.0.1:6100", new_block.clone(), vec![transaction]).await;
         assert!(new_new_block.is_valid());
         assert!(new_new_block.extends(&new_block));
 
