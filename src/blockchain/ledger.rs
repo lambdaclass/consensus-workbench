@@ -213,6 +213,16 @@ impl Ledger {
         loop {
             if candidate.nonce % Self::MINER_LOG_EVERY == 0 {
                 debug!("nonce: {}", candidate.nonce);
+                // This yield deserves some explanation. The problem is the
+                // following: if a different node finds a valid PoW block before
+                // us, the mining task needs to be reset so we can start on a proof
+                // of work for the new chain. To do this, what we do is send an abort
+                // signal (https://docs.rs/tokio/latest/tokio/task/struct.JoinHandle.html#method.abort)
+                // to the task to shut it down. For this to work, however, the mining task
+                // has to yield control to the executor, otherwise the signal is never sent
+                // and the task keeps mining until it finds a (now invalid and thus useless) PoW.
+                // Therefore, every once in a while this mining function will yield to make sure
+                // it aborts if it has to.
                 tokio::task::yield_now().await;
             }
             candidate.hash = candidate.calculate_hash();
