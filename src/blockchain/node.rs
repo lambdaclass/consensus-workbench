@@ -12,7 +12,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
-use lib::command::Command as ClientCommand;
+use lib::command::ClientCommand;
 
 /// The types of messages supported by this implementation's state machine.
 #[derive(Debug, Serialize, Deserialize, Clone)]

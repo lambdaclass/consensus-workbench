@@ -9,17 +9,18 @@ use std::net::SocketAddr;
 
 #[derive(Debug, Serialize, Deserialize, Parser, Clone, PartialEq, Eq)]
 #[clap()]
-pub enum Command {
+pub enum ClientCommand {
+    // user-generated commands
     Set { key: String, value: String },
     Get { key: String },
 }
 
-impl Command {
+impl ClientCommand {
     /// Send this command over to a server at the given address and return the response.
-    pub async fn send_to(&self, address: SocketAddr) -> Result<Option<String>> {
+    pub async fn send_to(self, address: SocketAddr) -> Result<Option<String>> {
         let mut sender = ReliableSender::new();
 
-        let message: Bytes = bincode::serialize(self)?.into();
+        let message: Bytes = bincode::serialize(&(self))?.into();
         let reply_handler = sender.send(address, message).await;
 
         let response = reply_handler.await?;
@@ -28,7 +29,7 @@ impl Command {
     }
 }
 
-impl fmt::Display for Command {
+impl fmt::Display for ClientCommand {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
     }

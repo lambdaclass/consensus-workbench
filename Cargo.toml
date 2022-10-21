@@ -23,6 +23,10 @@ name = "node_replication"
 path = "src/primary_backup/main.rs"
 
 [[bin]]
+name = "node_lock_commit"
+path = "src/lock_commit/main.rs"
+
+[[bin]]
 name = "blockchain"
 path = "src/blockchain/main.rs"
 

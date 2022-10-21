@@ -33,7 +33,11 @@ async fn main() {
 
     info!("Node socket: {}:{}", cli.address, cli.port);
 
-    simple_logger::SimpleLogger::new().env().init().unwrap();
+    simple_logger::SimpleLogger::new()
+        .env()
+        .with_level(log::LevelFilter::Info)
+        .init()
+        .unwrap();
 
     let address = SocketAddr::new(cli.address, cli.port);
 
@@ -80,13 +84,19 @@ fn db_name(cli: &Cli, default: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lib::command::Command;
+    use lib::command::ClientCommand;
     use std::fs;
     use tokio::time::{sleep, Duration};
 
+    // since logger is meant to be initialized once and tests run in parallel,
+    // run this before anything because otherwise it errors out
     #[ctor::ctor]
     fn init() {
-        simple_logger::SimpleLogger::new().env().init().unwrap();
+        simple_logger::SimpleLogger::new()
+            .env()
+            .with_level(log::LevelFilter::Info)
+            .init()
+            .unwrap();
 
         fs::remove_dir_all(db_path("")).unwrap_or_default();
     }
@@ -105,7 +115,7 @@ mod tests {
         });
         sleep(Duration::from_millis(10)).await;
 
-        let reply = Command::Get {
+        let reply = ClientCommand::Get {
             key: "k1".to_string(),
         }
         .send_to(address)
@@ -113,7 +123,7 @@ mod tests {
         .unwrap();
         assert!(reply.is_none());
 
-        let reply = Command::Set {
+        let reply = ClientCommand::Set {
             key: "k1".to_string(),
             value: "v1".to_string(),
         }
@@ -123,7 +133,7 @@ mod tests {
         assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
 
-        let reply = Command::Get {
+        let reply = ClientCommand::Get {
             key: "k1".to_string(),
         }
         .send_to(address)
@@ -165,7 +175,7 @@ mod tests {
         sleep(Duration::from_millis(10)).await;
 
         // get null value
-        let reply = Command::Get {
+        let reply = ClientCommand::Get {
             key: "k1".to_string(),
         }
         .send_to(address_primary)
@@ -174,7 +184,7 @@ mod tests {
         assert!(reply.is_none());
 
         // set a value on primary
-        let reply = Command::Set {
+        let reply = ClientCommand::Set {
             key: "k1".to_string(),
             value: "v1".to_string(),
         }
@@ -185,7 +195,7 @@ mod tests {
         assert_eq!("v1".to_string(), reply.unwrap());
 
         // get value on primary
-        let reply = Command::Get {
+        let reply = ClientCommand::Get {
             key: "k1".to_string(),
         }
         .send_to(address_primary)
@@ -195,7 +205,7 @@ mod tests {
         assert_eq!("v1".to_string(), reply.unwrap());
 
         // get value on replica to make sure it was replicated
-        let _reply = Command::Get {
+        let _reply = ClientCommand::Get {
             key: "k1".to_string(),
         }
         .send_to(address_replica)
@@ -207,7 +217,7 @@ mod tests {
         // assert_eq!("v1".to_string(), reply.unwrap());
 
         // should fail since replica should not respond to set commands
-        let reply = Command::Set {
+        let reply = ClientCommand::Set {
             key: "k3".to_string(),
             value: "_".to_string(),
         }
