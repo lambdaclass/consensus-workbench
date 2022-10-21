@@ -5,7 +5,7 @@ use std::fmt::Display;
 use anyhow::{bail, Result};
 use itertools::Itertools;
 
-use lib::command::Command;
+use lib::command::ClientCommand;
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 const DIFFICULTY_PREFIX: &str = "0000";
 
 pub type TransactionId = String;
-pub type Transaction = (TransactionId, Command);
+pub type Transaction = (TransactionId, ClientCommand);
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Block {
@@ -111,7 +111,7 @@ impl Ledger {
     pub fn get(&self, key: &str) -> Option<String> {
         for block in self.blocks.iter().rev() {
             for (_, cmd) in &block.data {
-                if let Command::Set {
+                if let ClientCommand::Set {
                     key: block_key,
                     value,
                 } = cmd
@@ -247,7 +247,7 @@ mod tests {
 
         block.data = vec![(
             "txid".to_string(),
-            Command::Set {
+            ClientCommand::Set {
                 key: "k".to_string(),
                 value: "v".to_string(),
             },
@@ -258,7 +258,7 @@ mod tests {
         // same command, different txid
         block.data = vec![(
             "txid2".to_string(),
-            Command::Set {
+            ClientCommand::Set {
                 key: "k".to_string(),
                 value: "v".to_string(),
             },
@@ -373,7 +373,7 @@ mod tests {
         let genesis = ledger.blocks.first().unwrap().clone();
         let transaction = (
             "tx1".to_string(),
-            Command::Set {
+            ClientCommand::Set {
                 key: "key".to_string(),
                 value: "value".to_string(),
             },
@@ -390,7 +390,7 @@ mod tests {
         // repeat
         let transaction = (
             "tx2".to_string(),
-            Command::Set {
+            ClientCommand::Set {
                 key: "key".to_string(),
                 value: "another".to_string(),
             },

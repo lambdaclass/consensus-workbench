@@ -6,13 +6,12 @@ use bytes::Bytes;
 use clap::Parser;
 use futures::sink::SinkExt as _;
 use lib::{
+    command::ClientCommand,
     network::{MessageHandler, Receiver, Writer},
     store::Store,
 };
 use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-
-use lib::command::Command;
 
 #[derive(Parser)]
 #[clap(author, version, about)]
@@ -34,16 +33,16 @@ struct Node {
 #[async_trait]
 impl MessageHandler for Node {
     async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
-        let request = bincode::deserialize(&bytes)?;
+        let request: ClientCommand = bincode::deserialize(&bytes)?;
         info!("Received request {:?}", request);
 
         let result = match request {
-            Command::Set { key, value } => {
+            ClientCommand::Set { key, value } => {
                 self.store
                     .write(key.clone().into(), value.clone().into())
                     .await
             }
-            Command::Get { key } => self.store.read(key.clone().into()).await,
+            ClientCommand::Get { key } => self.store.read(key.clone().into()).await,
         };
 
         // convert the error into something serializable
@@ -92,7 +91,7 @@ mod tests {
         });
         sleep(Duration::from_millis(10)).await;
 
-        let reply = Command::Get {
+        let reply = ClientCommand::Get {
             key: "k1".to_string(),
         }
         .send_to(address)
@@ -100,7 +99,7 @@ mod tests {
         .unwrap();
         assert!(reply.is_none());
 
-        let reply = Command::Set {
+        let reply = ClientCommand::Set {
             key: "k1".to_string(),
             value: "v1".to_string(),
         }
@@ -110,7 +109,7 @@ mod tests {
         assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
 
-        let reply = Command::Get {
+        let reply = ClientCommand::Get {
             key: "k1".to_string(),
         }
         .send_to(address)
@@ -119,7 +118,7 @@ mod tests {
         assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
 
-        let reply = Command::Set {
+        let reply = ClientCommand::Set {
             key: "k1".to_string(),
             value: "v2".to_string(),
         }
@@ -129,7 +128,7 @@ mod tests {
         assert!(reply.is_some());
         assert_eq!("v2".to_string(), reply.unwrap());
 
-        let reply = Command::Get {
+        let reply = ClientCommand::Get {
             key: "k1".to_string(),
         }
         .send_to(address)

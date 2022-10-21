@@ -70,14 +70,10 @@ impl ReliableSender {
 
     /// Broadcast the message to all specified addresses in a reliable manner. It returns a vector of
     /// cancel handlers ordered as the input `addresses` vector.
-    pub async fn broadcast(
-        &mut self,
-        addresses: Vec<SocketAddr>,
-        data: Bytes,
-    ) -> Vec<CancelHandler> {
+    pub async fn broadcast(&mut self, addresses: &[SocketAddr], data: Bytes) -> Vec<CancelHandler> {
         let mut handlers = Vec::new();
         for address in addresses {
-            let handler = self.send(address, data.clone()).await;
+            let handler = self.send(*address, data.clone()).await;
             handlers.push(handler);
         }
         handlers
@@ -93,7 +89,7 @@ impl ReliableSender {
     ) -> Vec<CancelHandler> {
         addresses.shuffle(&mut self.rng);
         addresses.truncate(nodes);
-        self.broadcast(addresses, data).await
+        self.broadcast(&addresses, data).await
     }
 }
 
@@ -291,7 +287,7 @@ mod tests {
 
         // Make the network sender and send the message.
         let mut sender = ReliableSender::new();
-        let cancel_handlers = sender.broadcast(addresses, Bytes::from(message)).await;
+        let cancel_handlers = sender.broadcast(&addresses, Bytes::from(message)).await;
 
         // Ensure we get back an acknowledgement for each message.
         assert!(try_join_all(cancel_handlers).await.is_ok());

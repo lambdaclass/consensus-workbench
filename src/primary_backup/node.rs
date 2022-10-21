@@ -13,7 +13,7 @@ use log::info;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
-use lib::command::Command as ClientCommand;
+use lib::command::ClientCommand;
 
 /// The types of messages supported by this implementation's state machine.
 #[derive(Debug, Serialize, Deserialize)]
@@ -137,11 +137,8 @@ impl Node {
         let sync_message: Bytes = bincode::serialize(&command).unwrap().into();
 
         // forward the command to all replicas and wait for them to respond
-        info!("Forwarding set to {:?}", self.peers.to_vec());
-        let handlers = self
-            .sender
-            .broadcast(self.peers.to_vec(), sync_message)
-            .await;
+        info!("Forwarding set to {:?}", self.peers);
+        let handlers = self.sender.broadcast(&self.peers, sync_message).await;
         futures::future::join_all(handlers).await;
     }
 }
