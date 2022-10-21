@@ -223,6 +223,8 @@ impl Ledger {
                 // and the task keeps mining until it finds a (now invalid and thus useless) PoW.
                 // Therefore, every once in a while this mining function will yield to make sure
                 // it aborts if it has to.
+                // In a production-like environment, we would setup a worker pool outside of tokio to handle this
+                // cpu-bound job, but we prefer to keep it simple for this implementation.
                 tokio::task::yield_now().await;
             }
             candidate.hash = candidate.calculate_hash();
