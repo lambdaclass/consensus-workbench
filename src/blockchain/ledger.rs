@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 // to start with n zeroes". The higher the n, the higher the difficulty.
 const DIFFICULTY_TARGET: u32 = if cfg!(test) {
     // Lower the difficulty for testing so it doesn't take very long
-    u32::MAX >> 8
+    u32::MAX >> 16
 } else {
     u32::MAX >> 18
 };
