@@ -7,10 +7,19 @@ use itertools::Itertools;
 
 use lib::command::ClientCommand;
 use log::{debug, warn};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const DIFFICULTY_PREFIX: &str = "0000";
+// Difficulty is expressed as the maximum u32 unsigned integer shifted a number of
+// bits to the right. This way, a difficulty of u32::MAX >> n means "the hash has
+// to start with n zeroes". The higher the n, the higher the difficulty.
+const DIFFICULTY_TARGET: u32 = if cfg!(test) {
+    // Lower the difficulty for testing so it doesn't take very long
+    u32::MAX >> 16
+} else {
+    u32::MAX >> 18
+};
 
 pub type TransactionId = String;
 pub type Transaction = (TransactionId, ClientCommand);
@@ -39,13 +48,16 @@ impl Block {
             hasher.update(cmd.to_string());
         }
         let hash = hasher.finalize().as_slice().to_owned();
-        hex::encode(hash)
+        hex::encode(&hash)
     }
 
     /// Create a genesis block, which is expected to be the first block of any valid ledger.
     pub fn genesis() -> Self {
         // using ugly placeholder values for genesis, maybe there are better ones
         let data = vec![];
+        // We use a random initial nonce so different nodes start at different values
+        // If they all start at the same value they will take the same amount of time
+        // to mine a block.
         let mut block = Self {
             height: 0,
             miner_id: "god".to_string(),
@@ -62,10 +74,19 @@ impl Block {
     /// Returns if this is a valid node: if its hash attribute matches the result of hashing the block data
     /// and meets the difficulty prefix (the amount of leading zeros) for the proof of work.
     fn is_valid(&self) -> bool {
-        if !self.hash.starts_with(DIFFICULTY_PREFIX) {
-            warn!("block has invalid difficulty {}", self.hash);
-            return false;
-        } else if self.calculate_hash() != self.hash {
+        match is_below_difficulty_target(&self.hash) {
+            Ok(false) => {
+                warn!("block has invalid difficulty {}", self.hash);
+                return false;
+            }
+            Err(_) => {
+                warn!("block has malformed hash {}", self.hash);
+                return false;
+            }
+            Ok(true) => {}
+        }
+
+        if self.calculate_hash() != self.hash {
             warn!("block has invalid hash {}", self.hash);
             return false;
         }
@@ -173,27 +194,43 @@ impl Ledger {
     /// --- the amount of leading zeros in the hash that is the proof of work.
     /// Note that the transactions are assumed to be safe for inclusion in the block, no duplicate
     /// checks are run here.
-    pub fn mine_block(
+    pub async fn mine_block(
         miner_id: &str,
         previous_block: Block,
         transactions: Vec<Transaction>,
     ) -> Block {
         debug!("mining block...");
+        let initial_nonce = rand::thread_rng().gen_range(0, 100000000);
         let mut candidate = Block {
             height: previous_block.height + 1,
             miner_id: miner_id.to_string(),
             previous_hash: previous_block.hash,
             hash: "not known yet".to_string(),
             data: transactions,
-            nonce: 0,
+            nonce: initial_nonce,
         };
 
         loop {
             if candidate.nonce % Self::MINER_LOG_EVERY == 0 {
                 debug!("nonce: {}", candidate.nonce);
+                // This yield deserves some explanation. The problem is the
+                // following: if a different node finds a valid PoW block before
+                // us, the mining task needs to be reset so we can start on a proof
+                // of work for the new chain. To do this, what we do is send an abort
+                // signal (https://docs.rs/tokio/latest/tokio/task/struct.JoinHandle.html#method.abort)
+                // to the task to shut it down. For this to work, however, the mining task
+                // has to yield control to the executor, otherwise the signal is never sent
+                // and the task keeps mining until it finds a (now invalid and thus useless) PoW.
+                // Therefore, every once in a while this mining function will yield to make sure
+                // it aborts if it has to.
+                // In a production-like environment, we would setup a worker pool outside of tokio to handle this
+                // cpu-bound job, but we prefer to keep it simple for this implementation.
+                tokio::task::yield_now().await;
             }
             candidate.hash = candidate.calculate_hash();
-            if candidate.hash.starts_with(DIFFICULTY_PREFIX) {
+            // I'm unwrapping because the only posible error is `candidate.hash` not
+            // being a valid hexstring, and that's not possible here.
+            if is_below_difficulty_target(&candidate.hash).unwrap() {
                 debug!(
                     "mined! nonce: {}, hash: {}",
                     candidate.nonce, candidate.hash
@@ -217,6 +254,20 @@ impl Display for Ledger {
     }
 }
 
+/// Returns whether the first four bytes of a given hash, when
+/// expressed as a 32 bit unsigned integer, are less than the
+/// the difficulty target or not. In practice, because we express the
+/// difficulty target as a number consisting of n zeroes followed by
+/// (32 - n) ones, what we are checking is if the first n bits are zero.
+fn is_below_difficulty_target(hash: &str) -> Result<bool> {
+    let hash_bytes = hex::decode(hash)?;
+    let first_four_bytes = u32::from(hash_bytes[0])
+        + (u32::from(hash_bytes[1]) << 8)
+        + (u32::from(hash_bytes[2]) << 16)
+        + (u32::from(hash_bytes[3]) << 24);
+
+    Ok(first_four_bytes < DIFFICULTY_TARGET)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,7 +332,7 @@ mod tests {
             previous_hash: genesis.hash.to_string(),
             hash: "invalid".to_string(),
             data: vec![],
-            nonce: 417843,
+            nonce: 67048562,
         };
 
         assert!(block.extends(&genesis));
@@ -319,9 +370,9 @@ mod tests {
             height: 1,
             miner_id: "127.0.0.1:6100".to_string(),
             previous_hash: Block::genesis().hash.to_string(),
-            hash: "0000c6c07082f30f572ddc571c4556566abe77cb8884c4cfad517c0db975c31b".to_string(),
+            hash: "ad260000963facb4d34b6b503d01beba7c58edaf6176b46ca92db75592cd8cf0".to_string(),
             data: vec![],
-            nonce: 417843,
+            nonce: 67048562,
         };
 
         let ledger = ledger.extend(block.clone()).unwrap();
@@ -338,9 +389,9 @@ mod tests {
             height: 1,
             miner_id: "127.0.0.1:6100".to_string(),
             previous_hash: Block::genesis().hash.to_string(),
-            hash: "0000c6c07082f30f572ddc571c4556566abe77cb8884c4cfad517c0db975c31b".to_string(),
+            hash: "ad260000963facb4d34b6b503d01beba7c58edaf6176b46ca92db75592cd8cf0".to_string(),
             data: vec![],
-            nonce: 417843,
+            nonce: 67048562,
         };
 
         let mut ledger = Ledger::new();
@@ -378,7 +429,8 @@ mod tests {
                 value: "value".to_string(),
             },
         );
-        let new_block = Ledger::mine_block("127.0.0.1:6100", genesis.clone(), vec![transaction]);
+        let new_block =
+            Ledger::mine_block("127.0.0.1:6100", genesis.clone(), vec![transaction]).await;
         assert!(new_block.is_valid());
         assert!(new_block.extends(&genesis));
 
@@ -396,7 +448,7 @@ mod tests {
             },
         );
         let new_new_block =
-            Ledger::mine_block("127.0.0.1:6100", new_block.clone(), vec![transaction]);
+            Ledger::mine_block("127.0.0.1:6100", new_block.clone(), vec![transaction]).await;
         assert!(new_new_block.is_valid());
         assert!(new_new_block.extends(&new_block));
 
