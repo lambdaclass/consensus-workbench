@@ -7,10 +7,9 @@ use itertools::Itertools;
 
 use lib::command::Command;
 use log::{debug, warn};
-use rand::{Rng, RngCore};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::sync::mpsc::Receiver;
 
 // Difficulty is expressed as the maximum u32 unsigned integer shifted a number of
 // bits to the right. This way, a difficulty of u32::MAX >> n means "the hash has
@@ -19,7 +18,7 @@ const DIFFICULTY_TARGET: u32 = if cfg!(test) {
     // Lower the difficulty for testing so it doesn't take very long
     u32::MAX >> 16
 } else {
-    u32::MAX >> 20
+    u32::MAX >> 18
 };
 
 pub type TransactionId = String;
@@ -199,9 +198,9 @@ impl Ledger {
         miner_id: &str,
         previous_block: Block,
         transactions: Vec<Transaction>,
-    ) -> Option<Block> {
+    ) -> Block {
         debug!("mining block...");
-        let initial_nonce = rand::thread_rng().next_u64();
+        let initial_nonce = rand::thread_rng().gen_range(0, 100000000);
         let mut candidate = Block {
             height: previous_block.height + 1,
             miner_id: miner_id.to_string(),
@@ -214,7 +213,6 @@ impl Ledger {
         loop {
             if candidate.nonce % Self::MINER_LOG_EVERY == 0 {
                 debug!("nonce: {}", candidate.nonce);
-                return None;
             }
             candidate.hash = candidate.calculate_hash();
             // I'm unwrapping because the only posible error is `candidate.hash` not
@@ -225,7 +223,7 @@ impl Ledger {
                     candidate.nonce, candidate.hash
                 );
 
-                return Some(candidate);
+                return candidate;
             }
             candidate.nonce += 1;
         }
