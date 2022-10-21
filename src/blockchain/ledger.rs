@@ -194,7 +194,7 @@ impl Ledger {
     /// --- the amount of leading zeros in the hash that is the proof of work.
     /// Note that the transactions are assumed to be safe for inclusion in the block, no duplicate
     /// checks are run here.
-    pub fn mine_block(
+    pub async fn mine_block(
         miner_id: &str,
         previous_block: Block,
         transactions: Vec<Transaction>,
@@ -213,6 +213,19 @@ impl Ledger {
         loop {
             if candidate.nonce % Self::MINER_LOG_EVERY == 0 {
                 debug!("nonce: {}", candidate.nonce);
+                // This yield deserves some explanation. The problem is the
+                // following: if a different node finds a valid PoW block before
+                // us, the mining task needs to be reset so we can start on a proof
+                // of work for the new chain. To do this, what we do is send an abort
+                // signal (https://docs.rs/tokio/latest/tokio/task/struct.JoinHandle.html#method.abort)
+                // to the task to shut it down. For this to work, however, the mining task
+                // has to yield control to the executor, otherwise the signal is never sent
+                // and the task keeps mining until it finds a (now invalid and thus useless) PoW.
+                // Therefore, every once in a while this mining function will yield to make sure
+                // it aborts if it has to.
+                // In a production-like environment, we would setup a worker pool outside of tokio to handle this
+                // cpu-bound job, but we prefer to keep it simple for this implementation.
+                tokio::task::yield_now().await;
             }
             candidate.hash = candidate.calculate_hash();
             // I'm unwrapping because the only posible error is `candidate.hash` not
@@ -416,7 +429,8 @@ mod tests {
                 value: "value".to_string(),
             },
         );
-        let new_block = Ledger::mine_block("127.0.0.1:6100", genesis.clone(), vec![transaction]);
+        let new_block =
+            Ledger::mine_block("127.0.0.1:6100", genesis.clone(), vec![transaction]).await;
         assert!(new_block.is_valid());
         assert!(new_block.extends(&genesis));
 
@@ -434,7 +448,7 @@ mod tests {
             },
         );
         let new_new_block =
-            Ledger::mine_block("127.0.0.1:6100", new_block.clone(), vec![transaction]);
+            Ledger::mine_block("127.0.0.1:6100", new_block.clone(), vec![transaction]).await;
         assert!(new_new_block.is_valid());
         assert!(new_new_block.extends(&new_block));
 
