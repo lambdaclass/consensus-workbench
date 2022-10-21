@@ -3,6 +3,7 @@
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use core::fmt;
+use lib::command::Command;
 use lib::network::SimpleSender;
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
@@ -11,6 +12,7 @@ use std::{collections::HashMap, net::SocketAddr};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+pub type Transaction = (TransactionId, Command);
 
 use lib::command::Command as ClientCommand;
 
@@ -62,6 +64,9 @@ pub struct Node {
 
     /// A copy of the sender end of the mining channel, held to pass to each new miner task.
     miner_sender: Sender<Block>,
+
+    /// The channel handler the node uses to send new work to the miner task
+    miner_work_sender: Sender<(Block, Vec<Transaction>)>,
 }
 
 use ClientCommand::*;
@@ -78,6 +83,28 @@ impl Node {
         }
 
         let (miner_sender, miner_receiver) = channel(2);
+        let (miner_work_sender, mut miner_work_receiver) = channel(2);
+        let miner_sender_clone = miner_sender.clone();
+
+        let miner_task = tokio::task::spawn_blocking(move || loop {
+            match miner_work_receiver.try_recv() {
+                Ok((previous_block, transactions)) => {
+                    debug!(
+                        "Received new mining message {:?} {:?}",
+                        previous_block, transactions
+                    );
+                    match Ledger::mine_block(&address.to_string(), previous_block, transactions) {
+                        Some(new_block) => {
+                            if let Err(err) = miner_sender.blocking_send(new_block) {
+                                error!("error sending mined block {}", err);
+                            }
+                        }
+                        None => {}
+                    }
+                }
+                Err(_) => {}
+            }
+        });
 
         Self {
             address,
@@ -85,9 +112,10 @@ impl Node {
             sender: SimpleSender::new(),
             mempool: HashMap::new(),
             ledger: Ledger::new(),
-            miner_task: tokio::spawn(async {}), // noop default
-            miner_sender,
-            miner_receiver,
+            miner_task: miner_task,
+            miner_sender: miner_sender_clone,
+            miner_receiver: miner_receiver,
+            miner_work_sender: miner_work_sender,
         }
     }
 
@@ -97,7 +125,7 @@ impl Node {
         &mut self,
         mut network_receiver: Receiver<(Message, oneshot::Sender<Result<Option<String>>>)>,
     ) -> JoinHandle<()> {
-        self.restart_miner();
+        self.restart_miner().await;
 
         // ask the seeds for their current state to catch up with the ledger and learn about peers
         let startup_message = GetState {
@@ -218,7 +246,7 @@ impl Node {
 
         // since the ledger and the mempool changed, the current miner task extending the old one is invalid
         // so we abort it and restart mining based on the latest ledger
-        self.restart_miner();
+        self.restart_miner().await;
 
         let message = State {
             from: self.address,
@@ -229,18 +257,15 @@ impl Node {
     }
 
     /// Abort the currently running miner task and start a new one based on the latest ledger and mempool.
-    fn restart_miner(&mut self) {
+    async fn restart_miner(&mut self) {
+        debug!("Restarting miner...");
         let previous_block = self.ledger.blocks.last().unwrap().clone();
         let transactions = self.mempool.clone().into_iter().collect();
-        let sender = self.miner_sender.clone();
-        let miner_id = self.address.to_string();
-        self.miner_task.abort();
-        self.miner_task = tokio::spawn(async move {
-            let new_block = Ledger::mine_block(&miner_id, previous_block, transactions);
-            if let Err(err) = sender.send(new_block).await {
-                error!("error sending mined block {}", err);
-            }
-        });
+
+        self.miner_work_sender
+            .send((previous_block, transactions))
+            .await
+            .unwrap();
     }
 
     /// Send the given message to all known peers. Doesn't wait for acknowledge.
@@ -342,7 +367,7 @@ mod tests {
         assert!(node.mempool.contains_key("tx2"));
 
         // don't include a transaction in the mempool if it's already in the ledger
-        node.restart_miner();
+        node.restart_miner().await;
         let block = node.miner_receiver.recv().await.unwrap();
         let new_ledger = node.ledger.extend(block).unwrap();
         node.update_ledger(new_ledger).await;
@@ -379,7 +404,7 @@ mod tests {
         assert_eq!(1, node1.ledger.blocks.len());
 
         // mine a block in one of the nodes
-        node1.restart_miner();
+        node1.restart_miner().await;
         let block = node1.miner_receiver.recv().await.unwrap();
         let new_ledger = node1.ledger.extend(block).unwrap();
         node1.update_ledger(new_ledger.clone()).await;
