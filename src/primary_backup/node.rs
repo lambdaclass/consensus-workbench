@@ -125,6 +125,7 @@ impl Node {
         futures::future::join_all(handlers).await;
     }
 
+    /// Runs the node to process network messages incoming in the given receiver
     pub async fn run(
         &mut self,
         mut network_receiver: Receiver<(Message, oneshot::Sender<Result<Option<Vec<u8>>>>)>,
@@ -134,6 +135,7 @@ impl Node {
         }
     }
 
+    /// Process each messages coming from clients and foward events to the replicas
     pub async fn handle_msg(
         &mut self,
         message: Message,
