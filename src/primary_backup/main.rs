@@ -238,24 +238,4 @@ mod tests {
         assert!(reply.is_err());
     }
 
-    /// Send Get commands to the given address with delayed retries to give it time for a transaction
-    /// to propagate. Fails if the expected value isn't read after 20 seconds.
-    async fn assert_eventually_equals(address: SocketAddr, key: &str, value: &str) {
-        let retries = FixedInterval::from_millis(100).take(200);
-        let reply = Retry::spawn(retries, || async {
-            let reply = ClientCommand::Get {
-                key: key.to_string(),
-            }
-            .send_to(address)
-            .await
-            .unwrap();
-            if reply.is_some() && reply.unwrap() == value.to_string() {
-                Ok(())
-            } else {
-                Err(())
-            }
-        })
-        .await;
-        assert!(reply.is_ok());
-    }
 }
