@@ -1,6 +1,5 @@
 use bytes::Bytes;
 use clap::Parser;
-use lib::network::Receiver;
 use lib::network::Receiver as NetworkReceiver;
 use lib::network::SimpleSender;
 use log::info;
@@ -102,8 +101,6 @@ mod tests {
     use lib::command::ClientCommand;
     use std::fs;
     use tokio::time::{sleep, Duration};
-    use tokio_retry::strategy::FixedInterval;
-    use tokio_retry::Retry;
 
     // since logger is meant to be initialized once and tests run in parallel,
     // run this before anything because otherwise it errors out
