@@ -1,3 +1,5 @@
+/// This module contains an implementation of a single node.
+/// The node keeps a state, wich could be updated by tcp requests.
 use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -12,7 +14,7 @@ use tokio::sync::oneshot;
 
 
 #[derive(Clone)]
-/// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
+/// The node keep a key value store.
 pub struct Node {
     pub store: Store,
 }
@@ -24,6 +26,7 @@ impl Node {
         }
     }
 
+    /// Runs the node to process network messages incoming in the given receiver
     pub async fn run(
         &mut self,
         mut network_receiver: Receiver<(ClientCommand, oneshot::Sender<Result<Option<Vec<u8>>>>)>,
@@ -33,6 +36,7 @@ impl Node {
         }
     }
 
+    /// Process each messages coming from clients
     pub async fn handle_msg(&mut self, message: ClientCommand, reply_sender: oneshot::Sender<Result<Option<Vec<u8>>>>) -> (){
         let result = match message {
             ClientCommand::Set { key, value } => {
