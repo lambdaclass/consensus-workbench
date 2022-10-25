@@ -10,6 +10,7 @@ use lib::{
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::oneshot;
 
+
 #[derive(Clone)]
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
 pub struct Node {
@@ -28,19 +29,24 @@ impl Node {
         mut network_receiver: Receiver<(ClientCommand, oneshot::Sender<Result<Option<Vec<u8>>>>)>,
     ) -> () {
         while let Some((message, reply_sender)) = network_receiver.recv().await {
-            let result = match message {
-                ClientCommand::Set { key, value } => {
-                    self.store
-                        .write(key.clone().into(), value.clone().into())
-                        .await
-                }
-                ClientCommand::Get { key } => self.store.read(key.clone().into()).await,
-            };
-
-            let _ = reply_sender.send(result);
+            self.handle_msg(message, reply_sender).await;
         }
     }
+
+    pub async fn handle_msg(&mut self, message: ClientCommand, reply_sender: oneshot::Sender<Result<Option<Vec<u8>>>>) -> (){
+        let result = match message {
+            ClientCommand::Set { key, value } => {
+                self.store
+                    .write(key.clone().into(), value.clone().into())
+                    .await
+            }
+            ClientCommand::Get { key } => self.store.read(key.clone().into()).await,
+        };
+        let _ = reply_sender.send(result);
+    }
 }
+
+
 
 #[derive(Clone)]
 pub struct NodeReceiverHandler {

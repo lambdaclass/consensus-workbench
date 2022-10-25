@@ -65,14 +65,6 @@ mod tests {
         let address: SocketAddr = "127.0.0.1:6182".parse().unwrap();
         spawn_node_tasks(address).await;
 
-        // get k1 -> null
-        let reply = ClientCommand::Get {
-            key: "k1".to_string(),
-        }
-        .send_to(address)
-        .await
-        .unwrap();
-        assert!(reply.is_none());
 
         // set k1
         let reply = ClientCommand::Set {
