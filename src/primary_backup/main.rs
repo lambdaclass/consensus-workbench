@@ -4,10 +4,15 @@ use lib::network::Receiver;
 use lib::network::SimpleSender;
 use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use tokio::task::JoinHandle;
+use tokio::sync::mpsc;
+use lib::network::Receiver as NetworkReceiver;
 
-use crate::node::{Message, Node};
+use crate::node::{Message, Node, NodeReceiverHandler};
 
 mod node;
+pub const CHANNEL_CAPACITY: usize = 1_000;
+
 
 #[derive(Parser)]
 #[clap(author, version, about)]
@@ -67,12 +72,25 @@ async fn main() {
         Node::primary(&db_name)
     };
 
-    tokio::spawn(async move {
-        let receiver = Receiver::new(address, node);
+    let (network_handle, _) = spawn_node_tasks(address, node).await;
+    network_handle.await.unwrap();
+
+}
+
+
+async fn spawn_node_tasks(address: SocketAddr,mut node: Node) -> (JoinHandle<()>, JoinHandle<()>) {
+    let (network_sender, network_receiver) = mpsc::channel(CHANNEL_CAPACITY);
+
+    let network_handle = tokio::spawn(async move {
+        node.run(network_receiver).await;
+    });
+
+    let node_handle = tokio::spawn(async move {
+        let receiver = NetworkReceiver::new(address, NodeReceiverHandler { network_sender });
         receiver.run().await;
-    })
-    .await
-    .unwrap();
+    });
+
+    (network_handle, node_handle)
 }
 
 fn db_name(cli: &Cli, default: &str) -> String {
@@ -85,6 +103,8 @@ fn db_name(cli: &Cli, default: &str) -> String {
 mod tests {
     use super::*;
     use lib::command::ClientCommand;
+    use tokio_retry::strategy::FixedInterval;
+    use tokio_retry::Retry;
     use std::fs;
     use tokio::time::{sleep, Duration};
 
@@ -108,11 +128,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_only_primary_server() {
         let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
-
-        tokio::spawn(async move {
-            let receiver = Receiver::new(address, node::Node::primary(&db_path("primary1")));
-            receiver.run().await;
-        });
+        let node =  node::Node::primary(&db_path("primary1"));
+        spawn_node_tasks(address, node).await;
         sleep(Duration::from_millis(10)).await;
 
         let reply = ClientCommand::Get {
@@ -150,15 +167,13 @@ mod tests {
 
         let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
         let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
-        tokio::spawn(async move {
-            let receiver = Receiver::new(address_replica, node::Node::backup(&db_path("backup2")));
-            receiver.run().await;
-        });
-        tokio::spawn(async move {
-            let receiver =
-                Receiver::new(address_primary, node::Node::primary(&db_path("primary2")));
-            receiver.run().await;
-        });
+
+        let primary =  node::Node::primary(&db_path("primary1"));
+        spawn_node_tasks(address_primary, primary).await;
+
+        let backup =  node::Node::backup(&db_path("backup2"));
+        spawn_node_tasks(address_replica, backup).await;
+
 
         // TODO: this "Subscribe" message is sent here for testing purposes.
         //       But it shouldn't be here. We should have an initialization loop
@@ -224,5 +239,26 @@ mod tests {
         .send_to(address_replica)
         .await;
         assert!(reply.is_err());
+    }
+
+        /// Send Get commands to the given address with delayed retries to give it time for a transaction
+    /// to propagate. Fails if the expected value isn't read after 20 seconds.
+    async fn assert_eventually_equals(address: SocketAddr, key: &str, value: &str) {
+        let retries = FixedInterval::from_millis(100).take(200);
+        let reply = Retry::spawn(retries, || async {
+            let reply = ClientCommand::Get {
+                key: key.to_string(),
+            }
+            .send_to(address)
+            .await
+            .unwrap();
+            if reply.is_some() && reply.unwrap() == value.to_string() {
+                Ok(())
+            } else {
+                Err(())
+            }
+        })
+        .await;
+        assert!(reply.is_ok());
     }
 }
