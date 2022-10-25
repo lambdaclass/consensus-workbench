@@ -65,7 +65,6 @@ mod tests {
         let address: SocketAddr = "127.0.0.1:6182".parse().unwrap();
         spawn_node_tasks(address).await;
 
-
         // set k1
         let reply = ClientCommand::Set {
             key: "k1".to_string(),

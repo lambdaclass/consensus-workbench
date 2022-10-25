@@ -12,7 +12,6 @@ use lib::{
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::oneshot;
 
-
 #[derive(Clone)]
 /// The node keep a key value store.
 pub struct Node {
@@ -37,7 +36,11 @@ impl Node {
     }
 
     /// Process each messages coming from clients
-    pub async fn handle_msg(&mut self, message: ClientCommand, reply_sender: oneshot::Sender<Result<Option<Vec<u8>>>>) -> (){
+    pub async fn handle_msg(
+        &mut self,
+        message: ClientCommand,
+        reply_sender: oneshot::Sender<Result<Option<Vec<u8>>>>,
+    ) -> () {
         let result = match message {
             ClientCommand::Set { key, value } => {
                 self.store
@@ -49,8 +52,6 @@ impl Node {
         let _ = reply_sender.send(result);
     }
 }
-
-
 
 #[derive(Clone)]
 pub struct NodeReceiverHandler {

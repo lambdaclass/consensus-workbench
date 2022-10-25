@@ -5,6 +5,7 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::sink::SinkExt as _;
+use lib::command::ClientCommand;
 use lib::{
     network::{MessageHandler, ReliableSender, Writer},
     store::Store,
@@ -14,7 +15,6 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::oneshot;
-use lib::command::ClientCommand;
 
 /// The types of messages supported by this implementation's state machine.
 #[derive(Debug, Serialize, Deserialize)]
@@ -115,7 +115,6 @@ impl MessageHandler for NodeReceiverHandler {
     }
 }
 
-
 impl Node {
     async fn forward_to_replicas(&mut self, command: ClientCommand) {
         let sync_message: Bytes = bincode::serialize(&command).unwrap().into();
@@ -126,19 +125,21 @@ impl Node {
         futures::future::join_all(handlers).await;
     }
 
-
     pub async fn run(
         &mut self,
         mut network_receiver: Receiver<(Message, oneshot::Sender<Result<Option<Vec<u8>>>>)>,
     ) -> () {
         while let Some((message, reply_sender)) = network_receiver.recv().await {
             self.handle_msg(message, reply_sender).await;
-      
         }
     }
 
-    pub async fn handle_msg(&mut self, message: Message, reply_sender: oneshot::Sender<Result<Option<Vec<u8>>>>) -> (){
-        let result =  match (self.state, message) {
+    pub async fn handle_msg(
+        &mut self,
+        message: Message,
+        reply_sender: oneshot::Sender<Result<Option<Vec<u8>>>>,
+    ) -> () {
+        let result = match (self.state, message) {
             (Primary, Command(Set { key, value })) => {
                 self.forward_to_replicas(Set {
                     key: key.clone(),
@@ -167,6 +168,4 @@ impl Node {
         };
         let _ = reply_sender.send(result);
     }
-
 }
-

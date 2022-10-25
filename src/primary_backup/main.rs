@@ -1,18 +1,17 @@
 use bytes::Bytes;
 use clap::Parser;
 use lib::network::Receiver;
+use lib::network::Receiver as NetworkReceiver;
 use lib::network::SimpleSender;
 use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use tokio::task::JoinHandle;
 use tokio::sync::mpsc;
-use lib::network::Receiver as NetworkReceiver;
+use tokio::task::JoinHandle;
 
 use crate::node::{Message, Node, NodeReceiverHandler};
 
 mod node;
 pub const CHANNEL_CAPACITY: usize = 1_000;
-
 
 #[derive(Parser)]
 #[clap(author, version, about)]
@@ -74,11 +73,9 @@ async fn main() {
 
     let (network_handle, _) = spawn_node_tasks(address, node).await;
     network_handle.await.unwrap();
-
 }
 
-
-async fn spawn_node_tasks(address: SocketAddr,mut node: Node) -> (JoinHandle<()>, JoinHandle<()>) {
+async fn spawn_node_tasks(address: SocketAddr, mut node: Node) -> (JoinHandle<()>, JoinHandle<()>) {
     let (network_sender, network_receiver) = mpsc::channel(CHANNEL_CAPACITY);
 
     let network_handle = tokio::spawn(async move {
@@ -103,10 +100,10 @@ fn db_name(cli: &Cli, default: &str) -> String {
 mod tests {
     use super::*;
     use lib::command::ClientCommand;
-    use tokio_retry::strategy::FixedInterval;
-    use tokio_retry::Retry;
     use std::fs;
     use tokio::time::{sleep, Duration};
+    use tokio_retry::strategy::FixedInterval;
+    use tokio_retry::Retry;
 
     // since logger is meant to be initialized once and tests run in parallel,
     // run this before anything because otherwise it errors out
@@ -127,8 +124,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_only_primary_server() {
+        fs::remove_dir_all(".primary1").unwrap_or_default();
         let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
-        let node =  node::Node::primary(&db_path("primary1"));
+        let node = node::Node::primary(&db_path("primary1"));
         spawn_node_tasks(address, node).await;
         sleep(Duration::from_millis(10)).await;
 
@@ -168,12 +166,11 @@ mod tests {
         let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
         let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
 
-        let primary =  node::Node::primary(&db_path("primary1"));
+        let primary = node::Node::primary(&db_path("db_test_primary2"));
         spawn_node_tasks(address_primary, primary).await;
 
-        let backup =  node::Node::backup(&db_path("backup2"));
+        let backup = node::Node::backup(&db_path("db_test_backup2"));
         spawn_node_tasks(address_replica, backup).await;
-
 
         // TODO: this "Subscribe" message is sent here for testing purposes.
         //       But it shouldn't be here. We should have an initialization loop
@@ -241,7 +238,7 @@ mod tests {
         assert!(reply.is_err());
     }
 
-        /// Send Get commands to the given address with delayed retries to give it time for a transaction
+    /// Send Get commands to the given address with delayed retries to give it time for a transaction
     /// to propagate. Fails if the expected value isn't read after 20 seconds.
     async fn assert_eventually_equals(address: SocketAddr, key: &str, value: &str) {
         let retries = FixedInterval::from_millis(100).take(200);
