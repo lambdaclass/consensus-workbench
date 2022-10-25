@@ -1,10 +1,7 @@
 /// This modules implements the most basic form of distributed system, a single node server that handles
 /// client requests to a key/value store. There is no replication and this no fault-tolerance.
 use clap::Parser;
-use lib::{
-    command::{self, ClientCommand},
-    network::Receiver as NetworkReceiver,
-};
+use lib::network::Receiver as NetworkReceiver;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
