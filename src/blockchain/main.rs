@@ -72,29 +72,6 @@ async fn spawn_node_tasks(
     (node_handle, network_handle, client_handle)
 }
 
-// #[derive(Clone)]
-// struct ClientReceiverHandler<T: Serialize + Send + Clone + std::fmt::Debug> {
-//     /// Used to forward incoming TCP messages to the node
-//     sender: Sender<(ClientCommand, oneshot::Sender<T>)>,
-// }
-
-// #[async_trait]
-// impl<T: Serialize + Send + Clone + std::fmt::Debug + 'static> MessageHandler
-//     for ClientReceiverHandler<T>
-// {
-//     /// When a TCP message is received, interpret it as a node::Message and forward it to the node task.
-//     /// Send the node's response back through the TCP connection.
-//     async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
-//         let request = bincode::deserialize(&bytes)?;
-
-//         let (reply_sender, reply_receiver) = oneshot::channel();
-//         self.sender.send((request, reply_sender)).await?;
-//         let reply = reply_receiver.await?;
-//         let reply = bincode::serialize(&reply)?;
-//         Ok(writer.send(reply.into()).await?)
-//     }
-// }
-
 #[cfg(test)]
 mod tests {
     use super::*;

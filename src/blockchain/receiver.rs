@@ -99,34 +99,11 @@ mod tests {
     use super::*;
 
     use bytes::Bytes;
-    use futures::sink::SinkExt as _;
     use tokio::sync::mpsc::channel;
-    use tokio::sync::mpsc::Sender;
     use tokio::time::{sleep, Duration};
 
-    use async_trait::async_trait;
     use tokio::net::TcpStream;
     use tokio_util::codec::{Framed, LengthDelimitedCodec};
-
-    #[derive(Clone)]
-    struct TestHandler {
-        deliver: Sender<String>,
-    }
-
-    #[async_trait]
-    impl MessageHandler for TestHandler {
-        async fn dispatch(&mut self, writer: &mut Writer, message: Bytes) -> Result<()> {
-            // Reply with an ACK.
-            let _ = writer.send(Bytes::from("Ack")).await;
-
-            // Deserialize the message.
-            let message = bincode::deserialize(&message).unwrap();
-
-            // Deliver the message to the application.
-            self.deliver.send(message).await.unwrap();
-            Ok(())
-        }
-    }
 
     #[tokio::test]
     async fn receive() {
@@ -134,14 +111,14 @@ mod tests {
         let address = "127.0.0.1:4000".parse::<SocketAddr>().unwrap();
         let (tx, mut rx) = channel(1);
         tokio::spawn(async move {
-            let receiver = Receiver::new(address, TestHandler { deliver: tx });
+            let receiver: Receiver<String, ()> = Receiver::new(address, tx);
             receiver.run().await;
         });
         sleep(Duration::from_millis(50)).await;
 
         // Send a message.
-        let sent = "Hello, world!";
-        let bytes = Bytes::from(bincode::serialize(sent).unwrap());
+        let sent = "Hello, world!".to_string();
+        let bytes = Bytes::from(bincode::serialize(&sent).unwrap());
         let stream = TcpStream::connect(address).await.unwrap();
         let mut transport = Framed::new(stream, LengthDelimitedCodec::new());
         transport.send(bytes.clone()).await.unwrap();
@@ -149,7 +126,7 @@ mod tests {
         // Ensure the message gets passed to the channel.
         let message = rx.recv().await;
         assert!(message.is_some());
-        let received = message.unwrap();
+        let (received, _) = message.unwrap();
         assert_eq!(received, sent);
     }
 }
