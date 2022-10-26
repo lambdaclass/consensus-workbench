@@ -57,15 +57,28 @@ async fn spawn_node_tasks(address: SocketAddr) -> (JoinHandle<()>, JoinHandle<()
 mod tests {
     use super::*;
     use lib::command::ClientCommand;
+    use std::fs;
+    use tokio::time::{sleep, Duration};
     use tokio_retry::strategy::FixedInterval;
     use tokio_retry::Retry;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_server() {
+        fs::remove_dir_all(".db_single_node").unwrap_or_default();
+
         let address: SocketAddr = "127.0.0.1:6182".parse().unwrap();
         spawn_node_tasks(address).await;
 
-        // set k1
+        sleep(Duration::from_millis(10)).await;
+
+        let reply = ClientCommand::Get {
+            key: "k1".to_string(),
+        }
+        .send_to(address)
+        .await
+        .unwrap();
+        assert!(reply.is_none());
+
         let reply = ClientCommand::Set {
             key: "k1".to_string(),
             value: "v1".to_string(),
@@ -76,7 +89,33 @@ mod tests {
         assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
 
-        assert_eventually_equals(address, "k1", "v1").await;
+        let reply = ClientCommand::Get {
+            key: "k1".to_string(),
+        }
+        .send_to(address)
+        .await
+        .unwrap();
+        assert!(reply.is_some());
+        assert_eq!("v1".to_string(), reply.unwrap());
+
+        let reply = ClientCommand::Set {
+            key: "k1".to_string(),
+            value: "v2".to_string(),
+        }
+        .send_to(address)
+        .await
+        .unwrap();
+        assert!(reply.is_some());
+        assert_eq!("v2".to_string(), reply.unwrap());
+
+        let reply = ClientCommand::Get {
+            key: "k1".to_string(),
+        }
+        .send_to(address)
+        .await
+        .unwrap();
+        assert!(reply.is_some());
+        assert_eq!("v2".to_string(), reply.unwrap());
     }
 
     /// Send Get commands to the given address with delayed retries to give it time for a transaction
