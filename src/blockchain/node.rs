@@ -96,7 +96,10 @@ impl Node {
     pub async fn run(
         &mut self,
         mut network_receiver: Receiver<Message>,
-        mut client_receiver: Receiver<(ClientCommand, oneshot::Sender<Result<Option<String>>>)>,
+        mut client_receiver: Receiver<(
+            ClientCommand,
+            oneshot::Sender<Result<Option<String>, String>>,
+        )>,
     ) -> JoinHandle<()> {
         self.restart_miner();
 
@@ -122,7 +125,7 @@ impl Node {
                     // for now generating the uuid here, should we let the client do it?
                     let txid = uuid::Uuid::new_v4().to_string();
                     let message = Command(txid, command);
-                    let result = self.handle_message(message.clone()).await;
+                    let result = self.handle_message(message.clone()).await.map_err(|e|e.to_string());
 
                     // in the case of clients sending a tcp request, we want to write a response directly
                     // to their connection
