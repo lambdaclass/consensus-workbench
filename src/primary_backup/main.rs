@@ -121,7 +121,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_only_primary_server() {
-        fs::remove_dir_all(".primary1").unwrap_or_default();
         let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
         let node = node::Node::primary(&db_path("primary1"));
         spawn_node_tasks(address, node).await;
@@ -157,9 +156,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_replicated_server() {
-        fs::remove_dir_all(".db_test_primary2").unwrap_or_default();
-        fs::remove_dir_all(".db_test_backup2").unwrap_or_default();
-
         let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
         let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
 
