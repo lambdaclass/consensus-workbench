@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use clap::Parser;
 use futures::SinkExt;
+use lib::command::ClientCommand;
 use lib::network::{MessageHandler, Receiver as NetworkReceiver, Writer};
 use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -42,7 +43,7 @@ async fn main() {
 
     let address = SocketAddr::new(cli.address, cli.port);
 
-    let (network_handle, _) = spawn_node_tasks(address, cli.seed).await;
+    let (_, network_handle, _) = spawn_node_tasks(address, cli.seed).await;
 
     network_handle.await.unwrap();
 }
@@ -51,40 +52,74 @@ async fn main() {
 async fn spawn_node_tasks(
     address: SocketAddr,
     seed: Option<SocketAddr>,
-) -> (JoinHandle<()>, JoinHandle<()>) {
+) -> (JoinHandle<()>, JoinHandle<()>, JoinHandle<()>) {
     let (network_sender, network_receiver) = channel(CHANNEL_CAPACITY);
-
-    let network_handle = tokio::spawn(async move {
-        let mut node = Node::new(address, seed);
-        node.run(network_receiver).await;
-    });
+    let (client_sender, client_receiver) = channel(CHANNEL_CAPACITY);
 
     let node_handle = tokio::spawn(async move {
-        let receiver = NetworkReceiver::new(address, NodeReceiverHandler { network_sender });
+        let mut node = Node::new(address, seed);
+        node.run(network_receiver, client_receiver).await;
+    });
+
+    let network_handle = tokio::spawn(async move {
+        let receiver = NetworkReceiver::new(
+            address,
+            NetworkReceiverHandler {
+                sender: network_sender,
+            },
+        );
         receiver.run().await;
     });
 
-    (network_handle, node_handle)
+    let client_handle = tokio::spawn(async move {
+        let receiver = NetworkReceiver::new(
+            address,
+            ClientReceiverHandler {
+                sender: client_sender,
+            },
+        );
+        receiver.run().await;
+    });
+
+    (node_handle, network_handle, client_handle)
 }
 
 #[derive(Clone)]
-struct NodeReceiverHandler {
+struct ClientReceiverHandler {
     /// Used to forward incoming TCP messages to the node
-    network_sender: Sender<(node::Message, oneshot::Sender<Result<Option<String>>>)>,
+    sender: Sender<(ClientCommand, oneshot::Sender<Result<Option<String>>>)>,
 }
 
 #[async_trait]
-impl MessageHandler for NodeReceiverHandler {
+impl MessageHandler for ClientReceiverHandler {
     /// When a TCP message is received, interpret it as a node::Message and forward it to the node task.
     /// Send the node's response back through the TCP connection.
     async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
-        let request = node::Message::deserialize(bytes)?;
+        let request = bincode::deserialize(&bytes)?;
 
         let (reply_sender, reply_receiver) = oneshot::channel();
-        self.network_sender.send((request, reply_sender)).await?;
+        self.sender.send((request, reply_sender)).await?;
         let reply = reply_receiver.await?.map_err(|e| e.to_string());
         let reply = bincode::serialize(&reply)?;
         Ok(writer.send(reply.into()).await?)
+    }
+}
+
+// FIXME reduce duplication
+#[derive(Clone)]
+struct NetworkReceiverHandler {
+    /// Used to forward incoming TCP messages to the node
+    sender: Sender<node::Message>,
+}
+
+#[async_trait]
+impl MessageHandler for NetworkReceiverHandler {
+    /// When a TCP message is received, interpret it as a node::Message and forward it to the node task.
+    /// Send the node's response back through the TCP connection.
+    async fn dispatch(&mut self, _writer: &mut Writer, bytes: Bytes) -> Result<()> {
+        let request = bincode::deserialize(&bytes)?;
+        self.sender.send(request).await?;
+        Ok(())
     }
 }
 
