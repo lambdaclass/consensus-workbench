@@ -12,7 +12,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
-use lib::command::ClientCommand;
+use lib::command::{ClientCommand, CommandResult};
 
 /// The types of messages supported by this implementation's state machine.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -95,11 +95,8 @@ impl Node {
     /// task to produce blocks to extend the node's ledger.
     pub async fn run(
         &mut self,
-        mut network_receiver: Receiver<Message>,
-        mut client_receiver: Receiver<(
-            ClientCommand,
-            oneshot::Sender<Result<Option<String>, String>>,
-        )>,
+        mut network_receiver: Receiver<(Message, oneshot::Sender<()>)>,
+        mut client_receiver: Receiver<(ClientCommand, oneshot::Sender<CommandResult>)>,
     ) -> JoinHandle<()> {
         self.restart_miner();
 
@@ -133,7 +130,7 @@ impl Node {
                         error!("failed to send message {:?} response {:?}", message, error);
                     };
                 }
-                Some(message) = network_receiver.recv() => {
+                Some((message, _)) = network_receiver.recv() => {
                     info!("Received network message {}", message);
 
                     // FIXME network messages shouldn't fail

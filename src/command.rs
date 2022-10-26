@@ -7,6 +7,8 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
+pub type CommandResult = Result<Option<String>, String>;
+
 #[derive(Debug, Serialize, Deserialize, Parser, Clone, PartialEq, Eq)]
 #[clap()]
 pub enum ClientCommand {
@@ -24,7 +26,7 @@ impl ClientCommand {
         let reply_handler = sender.send(address, message).await;
 
         let response = reply_handler.await?;
-        let response: Result<Option<String>, String> = bincode::deserialize(&response)?;
+        let response: CommandResult = bincode::deserialize(&response)?;
         response.map_err(|e| anyhow!(e))
     }
 }

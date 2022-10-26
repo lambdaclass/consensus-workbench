@@ -1,16 +1,9 @@
 /// This module is a binary that listens for TCP connections, runs a node and forwards to it incoming client and peer messages.
-use anyhow::Result;
-use async_trait::async_trait;
-use bytes::Bytes;
 use clap::Parser;
-use futures::SinkExt;
-use lib::command::ClientCommand;
-use receiver::{Receiver as NetworkReceiver, Writer};
 use log::info;
-use serde::Serialize;
+use receiver::Receiver as NetworkReceiver;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use tokio::sync::mpsc::{channel, Sender};
-use tokio::sync::oneshot;
+use tokio::sync::mpsc::channel;
 use tokio::task::JoinHandle;
 
 use crate::node::Node;
@@ -47,7 +40,7 @@ async fn main() {
     // FIXME lazily assuming +1000 for client port. move to CLI if anyone cares about it
     let client_address = SocketAddr::new(cli.address, cli.port + 1000);
 
-    let (_, network_handle) = spawn_node_tasks(network_address, client_address, cli.seed).await;
+    let (_, network_handle, _) = spawn_node_tasks(network_address, client_address, cli.seed).await;
 
     network_handle.await.unwrap();
 }
@@ -57,7 +50,7 @@ async fn spawn_node_tasks(
     network_address: SocketAddr,
     client_address: SocketAddr,
     seed: Option<SocketAddr>,
-) -> (JoinHandle<()>, JoinHandle<()>) {
+) -> (JoinHandle<()>, JoinHandle<()>, JoinHandle<()>) {
     let (network_sender, network_receiver) = channel(CHANNEL_CAPACITY);
     let (client_sender, client_receiver) = channel(CHANNEL_CAPACITY);
 
@@ -71,17 +64,12 @@ async fn spawn_node_tasks(
         receiver.run().await;
     });
 
-    // let client_handle = tokio::spawn(async move {
-    //     let receiver = NetworkReceiver::new(
-    //         client_address,
-    //         ClientReceiverHandler {
-    //             sender: client_sender,
-    //         },
-    //     );
-    //     receiver.run().await;
-    // });
+    let client_handle = tokio::spawn(async move {
+        let receiver = NetworkReceiver::new(client_address, client_sender);
+        receiver.run().await;
+    });
 
-    (node_handle, network_handle)
+    (node_handle, network_handle, client_handle)
 }
 
 // #[derive(Clone)]
@@ -106,7 +94,6 @@ async fn spawn_node_tasks(
 //         Ok(writer.send(reply.into()).await?)
 //     }
 // }
-
 
 #[cfg(test)]
 mod tests {

@@ -1,17 +1,15 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use anyhow::Result;
-use async_trait::async_trait;
-use bytes::Bytes;
-use futures::stream::SplitSink;
 use futures::stream::StreamExt as _;
+use futures::SinkExt;
 use log::{debug, warn};
-use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::net::SocketAddr;
-use tokio::net::{TcpListener, TcpStream};
-use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use thiserror::Error;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
+use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 #[derive(Error, Debug)]
 pub enum NetworkError {
@@ -22,20 +20,24 @@ pub enum NetworkError {
     FailedToReceiveMessage(SocketAddr, std::io::Error),
 }
 
-/// Convenient alias for the writer end of the TCP channel.
-pub type Writer = SplitSink<Framed<TcpStream, LengthDelimitedCodec>, Bytes>;
-
 /// For each incoming request, we spawn a new runner responsible to receive messages and forward them
 /// through the provided deliver channel.
-pub struct Receiver<M> {
+pub struct Receiver<Request, Response> {
     /// Address to listen to.
     address: SocketAddr,
-    sender: mpsc::Sender<M>
+    sender: mpsc::Sender<(Request, oneshot::Sender<Response>)>,
 }
 
-impl<M: DeserializeOwned + std::fmt::Debug + Send + 'static> Receiver<M> {
+impl<
+        Request: DeserializeOwned + std::fmt::Debug + Send + 'static,
+        Response: std::fmt::Debug + Serialize + Send + 'static,
+    > Receiver<Request, Response>
+{
     /// Spawn a new network receiver handling connections from any incoming peer.
-    pub fn new(address: SocketAddr, sender: mpsc::Sender<M>) -> Self {
+    pub fn new(
+        address: SocketAddr,
+        sender: mpsc::Sender<(Request, oneshot::Sender<Response>)>,
+    ) -> Self {
         // FIXME create channel here
         Self { address, sender }
     }
@@ -62,17 +64,24 @@ impl<M: DeserializeOwned + std::fmt::Debug + Send + 'static> Receiver<M> {
 
     /// Spawn a new runner to handle a specific TCP connection. It receives messages and process them
     /// using the provided handler.
-    async fn spawn_runner(socket: TcpStream, peer: SocketAddr, sender: mpsc::Sender<M>) {
+    async fn spawn_runner(
+        socket: TcpStream,
+        peer: SocketAddr,
+        sender: mpsc::Sender<(Request, oneshot::Sender<Response>)>,
+    ) {
         tokio::spawn(async move {
             let transport = Framed::new(socket, LengthDelimitedCodec::new());
-            // FIXME add optional writing
-            let (mut _writer, mut reader) = transport.split();
+            let (mut writer, mut reader) = transport.split();
             while let Some(frame) = reader.next().await {
                 match frame.map_err(|e| NetworkError::FailedToReceiveMessage(peer, e)) {
                     Ok(message) => {
-                        // FIXME unwrap
+                        // FIXME unwraps
                         let request = bincode::deserialize(&message.freeze()).unwrap();
-                        sender.send(request).await.unwrap();
+                        let (reply_sender, reply_receiver) = oneshot::channel();
+                        sender.send((request, reply_sender)).await.unwrap();
+                        let reply = reply_receiver.await.unwrap();
+                        let reply = bincode::serialize(&reply).unwrap();
+                        writer.send(reply.into()).await.unwrap();
                     }
                     Err(e) => {
                         warn!("{}", e);
