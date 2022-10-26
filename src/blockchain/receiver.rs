@@ -4,6 +4,7 @@ use futures::SinkExt;
 use log::{debug, warn};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use std::fmt::Debug;
 use std::net::SocketAddr;
 use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream};
@@ -29,8 +30,8 @@ pub struct Receiver<Request, Response> {
 }
 
 impl<
-        Request: DeserializeOwned + std::fmt::Debug + Send + 'static,
-        Response: std::fmt::Debug + Serialize + Send + 'static,
+        Request: DeserializeOwned + Send + Debug + 'static,
+        Response: Serialize + Send + Debug + 'static,
     > Receiver<Request, Response>
 {
     /// Spawn a new network receiver handling connections from any incoming peer.
