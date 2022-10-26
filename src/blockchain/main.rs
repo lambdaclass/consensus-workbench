@@ -1,7 +1,7 @@
 /// This module is a binary that listens for TCP connections, runs a node and forwards to it incoming client and peer messages.
 use clap::Parser;
 use log::info;
-use receiver::Receiver as NetworkReceiver;
+use receiver::Receiver;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::sync::mpsc::channel;
 use tokio::task::JoinHandle;
@@ -11,8 +11,6 @@ use crate::node::Node;
 mod ledger;
 mod node;
 mod receiver;
-
-pub const CHANNEL_CAPACITY: usize = 1_000;
 
 #[derive(Parser)]
 #[clap(author, version, about)]
@@ -51,22 +49,21 @@ async fn spawn_node_tasks(
     client_address: SocketAddr,
     seed: Option<SocketAddr>,
 ) -> (JoinHandle<()>, JoinHandle<()>, JoinHandle<()>) {
-    let (network_sender, network_receiver) = channel(CHANNEL_CAPACITY);
-    let (client_sender, client_receiver) = channel(CHANNEL_CAPACITY);
+    // FIXME mixed sender/receiver naming scheme here
 
-    let node_handle = tokio::spawn(async move {
-        let mut node = Node::new(network_address, seed);
-        node.run(network_receiver, client_receiver).await;
-    });
-
+    let (network_receiver, network_rx) = Receiver::new(network_address);
     let network_handle = tokio::spawn(async move {
-        let receiver = NetworkReceiver::new(network_address, network_sender);
-        receiver.run().await;
+        network_receiver.run().await;
     });
 
+    let (client_receiver, client_rx) = Receiver::new(client_address);
     let client_handle = tokio::spawn(async move {
-        let receiver = NetworkReceiver::new(client_address, client_sender);
-        receiver.run().await;
+        client_receiver.run().await;
+    });
+
+    let mut node = Node::new(network_address, seed);
+    let node_handle = tokio::spawn(async move {
+        node.run(network_rx, client_rx).await;
     });
 
     (node_handle, network_handle, client_handle)

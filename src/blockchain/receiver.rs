@@ -8,9 +8,11 @@ use std::fmt::Debug;
 use std::net::SocketAddr;
 use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, channel};
 use tokio::sync::oneshot;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
+
+pub const CHANNEL_CAPACITY: usize = 1_000;
 
 #[derive(Error, Debug)]
 pub enum NetworkError {
@@ -21,11 +23,14 @@ pub enum NetworkError {
     FailedToReceiveMessage(SocketAddr, std::io::Error),
 }
 
-/// For each incoming request, we spawn a new runner responsible to receive messages and forward them
-/// through the provided deliver channel.
+// FIXME consider renaming to TcpSender, TcpReceiver, ChannelSender, ChannelReceiver, etc. to reduce ambiguity
+/// A TCP Receiver listens for peer connections and writes messages from all connections to a multi-producer
+/// single-consumer (mpsc) tokio channel.
 pub struct Receiver<Request, Response> {
     /// Address to listen to.
     address: SocketAddr,
+
+    /// The sending end of the channel where incoming tpc messages will be forwarded to
     sender: mpsc::Sender<(Request, oneshot::Sender<Response>)>,
 }
 
@@ -35,12 +40,12 @@ impl<
     > Receiver<Request, Response>
 {
     /// Spawn a new network receiver handling connections from any incoming peer.
+    /// The messages received through those connections are written to channel, whose receiving end is returned.
     pub fn new(
         address: SocketAddr,
-        sender: mpsc::Sender<(Request, oneshot::Sender<Response>)>,
-    ) -> Self {
-        // FIXME create channel here
-        Self { address, sender }
+    ) -> (Self, mpsc::Receiver<(Request, oneshot::Sender<Response>)>) {
+        let (sender, receiver) = channel(CHANNEL_CAPACITY);
+        (Self { address, sender }, receiver)
     }
 
     /// Main loop responsible to accept incoming connections and spawn a new runner to handle it.
@@ -76,6 +81,7 @@ impl<
             while let Some(frame) = reader.next().await {
                 match frame.map_err(|e| NetworkError::FailedToReceiveMessage(peer, e)) {
                     Ok(message) => {
+                        // TODO add comments
                         // FIXME unwraps
                         let request = bincode::deserialize(&message.freeze()).unwrap();
                         let (reply_sender, reply_receiver) = oneshot::channel();
@@ -100,7 +106,6 @@ mod tests {
     use super::*;
 
     use bytes::Bytes;
-    use tokio::sync::mpsc::channel;
     use tokio::time::{sleep, Duration};
 
     use tokio::net::TcpStream;
@@ -110,9 +115,8 @@ mod tests {
     async fn receive() {
         // Make the network receiver.
         let address = "127.0.0.1:4000".parse::<SocketAddr>().unwrap();
-        let (tx, mut rx) = channel(1);
+        let (receiver, mut rx): (Receiver<String, ()>, _) = Receiver::new(address);
         tokio::spawn(async move {
-            let receiver: Receiver<String, ()> = Receiver::new(address, tx);
             receiver.run().await;
         });
         sleep(Duration::from_millis(50)).await;
