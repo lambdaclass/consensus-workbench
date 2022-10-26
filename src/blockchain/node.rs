@@ -1,6 +1,6 @@
 /// This module contains the definition of a node in a blockchain p2p network, where each node maintains
 /// a ledger of key/value store transactions, as well of the network messages supported between nodes.
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use bytes::Bytes;
 use core::fmt;
 use lib::network::SimpleSender;
@@ -132,7 +132,9 @@ impl Node {
                 }
                 Some(message) = network_receiver.recv() => {
                     info!("Received network message {}", message);
-                    self.handle_message(message.clone()).await;
+
+                    // FIXME network messages shouldn't fail
+                    self.handle_message(message.clone()).await.unwrap();
                 }
                 else => {
                     error!("node channels are closed");
