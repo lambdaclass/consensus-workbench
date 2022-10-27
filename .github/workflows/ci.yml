@@ -17,7 +17,7 @@ jobs:
             components: clippy
             failure-mode: warnings
       - uses: Swatinem/rust-cache@v1
-      - run: cargo +nightly clippy
+      - run: cargo +nightly clippy --all-targets --all-features -- -D warnings
   format:
     runs-on: [self-hosted]
     steps:
