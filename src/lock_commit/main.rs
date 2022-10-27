@@ -38,7 +38,7 @@ struct Cli {
         use_value_delimiter = true,
         value_delimiter = ' '
     )]
-    peers: Option<Vec<SocketAddr>>,
+    peers: Vec<SocketAddr>,
 
     #[clap(short, long, value_parser, value_name = "UINT")]
     view_change: bool,
@@ -50,7 +50,7 @@ struct Cli {
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
-    let mut cli = Cli::parse();
+    let cli = Cli::parse();
 
     info!("Node socket: {}:{}", cli.address, cli.port);
 
@@ -65,12 +65,10 @@ async fn main() {
         return send_command(address, Command::Client(cmd)).await;
     }
 
-    if cli.peers.is_none() {
-        cli.peers = Some(vec!["127.0.0.1:6109".parse().unwrap()]);
-    }
+
 
     let node = Node::new(
-        cli.peers.unwrap(),
+        cli.peers,
         &format!(".db_{}", address.port()),
         address,
         timer_start.clone(),
