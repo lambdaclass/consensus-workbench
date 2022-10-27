@@ -8,7 +8,7 @@ use bytes::Bytes;
 use futures::sink::SinkExt as _;
 use lib::{
     command::{self, ClientCommand},
-    network::{MessageHandler, ReliableSender, Writer},
+    network::{MessageHandler, Writer, SimpleSender},
     store::Store,
 };
 use log::info;
@@ -27,7 +27,7 @@ pub struct Node {
     pub socket_address: SocketAddr,
     pub store: Store,
     pub peers: Vec<SocketAddr>,
-    pub sender: ReliableSender,
+    pub sender: SimpleSender,
 
     // fixme: shared state is wrapped in Arc<RwLock<>>s because this is cloned for every received request
     // in the future, we want to implement a channel-based solution like in some of the other PoCs
@@ -88,7 +88,7 @@ impl Node {
         Self {
             store: Store::new(db_path).unwrap(),
             peers: peers,
-            sender: ReliableSender::new(),
+            sender: SimpleSender::new(),
             current_view: Arc::new(RwLock::new(0)),
             command_view_lock: Arc::new(RwLock::new(CommandView::new())),
             lock_responses: Arc::new(Mutex::new(HashSet::new())),
@@ -134,7 +134,8 @@ impl Node {
                 // since we are primary, we lock the command view
 
                 self.lock_command_view(&command_view);
-
+                let _ = self.handle_lock_message(self.socket_address, command_view.clone()).await;
+                
                 let command = NetworkCommand::Propose {
                     command_view: command_view.clone(),
                 };
@@ -142,7 +143,9 @@ impl Node {
                 *self.timer_start.write().unwrap() = Instant::now(); // for blame/view-change
 
                 info!("Received command, broadcasting Propose");
-                self.broadcast(command).await;
+                self.broadcast_to_others(command).await;
+
+   
                 Ok(None)
             }
 
@@ -268,7 +271,7 @@ impl Node {
                     .await
                     .expect("Error committing command as primary");
 
-                self.broadcast(NetworkCommand::Commit {
+                self.broadcast_to_others(NetworkCommand::Commit {
                     command_view: command_view,
                 })
                 .await;
@@ -293,9 +296,8 @@ impl Node {
             .into();
 
         // forward the command to all replicas and wait for them to respond
-        let handlers = self.sender.broadcast(&self.peers, message).await;
+        self.sender.broadcast(self.peers.clone(), message).await;
 
-        futures::future::join_all(handlers).await;
     }
 
     async fn broadcast_to_others(&mut self, network_command: NetworkCommand) {
@@ -311,9 +313,8 @@ impl Node {
             .collect();
 
         // forward the command to all replicas and wait for them to respond
-        let handlers = self.sender.broadcast(&other_peers, message).await;
+        self.sender.broadcast(other_peers, message).await;
 
-        futures::future::join_all(handlers).await;
     }
 
     async fn send_to_primary(&mut self, cmd: Command) {
@@ -321,7 +322,7 @@ impl Node {
         let primary_address = *(self.get_primary(*self.current_view.read().unwrap()));
 
         // forward the command to all replicas and wait for them to respond
-        let _ = self.sender.send(primary_address, message).await.await;
+        let _ = self.sender.send(primary_address, message).await;
     }
 
     async fn try_commit(&mut self, command_view: CommandView) -> Result<Option<Vec<u8>>> {
