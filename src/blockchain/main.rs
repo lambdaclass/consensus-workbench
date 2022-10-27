@@ -3,7 +3,6 @@ use clap::Parser;
 use log::info;
 use receiver::Receiver;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use tokio::sync::mpsc::channel;
 use tokio::task::JoinHandle;
 
 use crate::node::Node;
@@ -43,27 +42,29 @@ async fn main() {
     network_handle.await.unwrap();
 }
 
-/// Spawn the network receiver and a blockchain node with a channel to pass messages from one to the other.
+/// Spawn the client and network receivers and a blockchain node that listents to messages from both.
 async fn spawn_node_tasks(
     network_address: SocketAddr,
     client_address: SocketAddr,
     seed: Option<SocketAddr>,
 ) -> (JoinHandle<()>, JoinHandle<()>, JoinHandle<()>) {
-    // FIXME mixed sender/receiver naming scheme here
-
-    let (network_receiver, network_rx) = Receiver::new(network_address);
+    // listen for peer network tcp connections
+    let (network_tcp_receiver, network_channel_receiver) = Receiver::new(network_address);
     let network_handle = tokio::spawn(async move {
-        network_receiver.run().await;
+        network_tcp_receiver.run().await;
     });
 
-    let (client_receiver, client_rx) = Receiver::new(client_address);
+    // listen for client command tcp connections
+    let (client_tcp_receiver, client_channel_receiver) = Receiver::new(client_address);
     let client_handle = tokio::spawn(async move {
-        client_receiver.run().await;
+        client_tcp_receiver.run().await;
     });
 
+    // run a task to manage the blockchain node state, listening for messages from client and network
     let mut node = Node::new(network_address, seed);
     let node_handle = tokio::spawn(async move {
-        node.run(network_rx, client_rx).await;
+        node.run(network_channel_receiver, client_channel_receiver)
+            .await;
     });
 
     (node_handle, network_handle, client_handle)
