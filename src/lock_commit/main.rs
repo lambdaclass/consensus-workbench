@@ -65,8 +65,6 @@ async fn main() {
         return send_command(address, Command::Client(cmd)).await;
     }
 
-
-
     let node = Node::new(
         cli.peers,
         &format!(".db_{}", address.port()),
