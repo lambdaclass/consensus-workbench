@@ -36,7 +36,7 @@ struct Cli {
         value_parser,
         value_name = "ADDR",
         use_value_delimiter = true,
-        value_delimiter = ' ',
+        value_delimiter = ' '
     )]
     peers: Option<Vec<SocketAddr>>,
 
@@ -66,8 +66,8 @@ async fn main() {
     }
 
     if cli.peers.is_none() {
-        cli.peers = Some(vec!("127.0.0.1:6109".parse().unwrap()));
-      }
+        cli.peers = Some(vec!["127.0.0.1:6109".parse().unwrap()]);
+    }
 
     let node = Node::new(
         cli.peers.unwrap(),
@@ -101,7 +101,9 @@ async fn main() {
         node.socket_address,
         matches!(node.get_state(), State::Primary)
     );
-    spawn_node_tasks(address, node).await;
+
+    let (network_handle, _) = spawn_node_tasks(address, node).await;
+    network_handle.await.unwrap();
 }
 
 async fn spawn_node_tasks(address: SocketAddr, mut node: Node) -> (JoinHandle<()>, JoinHandle<()>) {
@@ -147,115 +149,117 @@ mod tests {
         format!(".db_test/{}", suffix)
     }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn test_only_primary_server() {
-    let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
-    let timer_start = Arc::new(RwLock::new(Instant::now()));
-    fs::remove_dir_all(".db_test_primary1").unwrap_or_default();
-    let node = node::Node::new(
-        vec![address],
-        &db_path("primary1"),
-        address,
-        timer_start.clone(),
-    );
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_only_primary_server() {
+        let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
+        let timer_start = Arc::new(RwLock::new(Instant::now()));
+        fs::remove_dir_all(".db_test_primary1").unwrap_or_default();
+        let node = node::Node::new(
+            vec![address],
+            &db_path("primary1"),
+            address,
+            timer_start.clone(),
+        );
 
-    spawn_node_tasks(address, node).await;
+        spawn_node_tasks(address, node).await;
 
-    sleep(Duration::from_millis(10)).await;
+        sleep(Duration::from_millis(10)).await;
 
-    let reply = Command::Client(ClientCommand::Get {
-        key: "k1".to_string(),
-    })
-    .send_to(address)
-    .await
-    .unwrap();
-    assert!(reply.is_none());
+        let reply = Command::Client(ClientCommand::Get {
+            key: "k1".to_string(),
+        })
+        .send_to(address)
+        .await
+        .unwrap();
+        assert!(reply.is_none());
 
-    let _ = Command::Client(ClientCommand::Set {
-        key: "k1".to_string(),
-        value: "v1".to_string(),
-    })
-    .send_to(address)
-    .await
-    .unwrap();
+        let _ = Command::Client(ClientCommand::Set {
+            key: "k1".to_string(),
+            value: "v1".to_string(),
+        })
+        .send_to(address)
+        .await
+        .unwrap();
 
-    sleep(Duration::from_millis(10)).await;
+        sleep(Duration::from_millis(10)).await;
 
-    let reply = Command::Client(ClientCommand::Get {
-        key: "k1".to_string(),
-    })
-    .send_to(address)
-    .await
-    .unwrap();
-    assert!(reply.is_some());
-    assert_eq!("v1".to_string(), reply.unwrap());
-}
+        let reply = Command::Client(ClientCommand::Get {
+            key: "k1".to_string(),
+        })
+        .send_to(address)
+        .await
+        .unwrap();
+        assert!(reply.is_some());
+        assert_eq!("v1".to_string(), reply.unwrap());
+    }
 
-#[tokio::test()]
-async fn test_replicated_server() {
-    let timer_start = Arc::new(RwLock::new(Instant::now()));
-    let timer_start_secondary = Arc::new(RwLock::new(Instant::now()));
-    fs::remove_dir_all(".db_test_primary2").unwrap_or_default();
-    fs::remove_dir_all(".db_test_backup2").unwrap_or_default();
+    #[tokio::test()]
+    async fn test_replicated_server() {
+        let timer_start = Arc::new(RwLock::new(Instant::now()));
+        let timer_start_secondary = Arc::new(RwLock::new(Instant::now()));
+        fs::remove_dir_all(".db_test_primary2").unwrap_or_default();
+        fs::remove_dir_all(".db_test_backup2").unwrap_or_default();
 
-    let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
-    let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
+        let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
+        let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
 
-    let backup = node::Node::new(
-        vec![address_primary, address_replica],
-        &db_path("backup2"),
-        address_replica,
-        timer_start,
-    );
+        let backup = node::Node::new(
+            vec![address_primary, address_replica],
+            &db_path("backup2"),
+            address_replica,
+            timer_start,
+        );
 
-    let primary =  node::Node::new(
-        vec![address_primary, address_replica],
-        &db_path("primary2"),
-        address_primary,
-        timer_start_secondary,
-    );
+        let primary = node::Node::new(
+            vec![address_primary, address_replica],
+            &db_path("primary2"),
+            address_primary,
+            timer_start_secondary,
+        );
 
-    spawn_node_tasks(address_primary, primary).await;
-    spawn_node_tasks(address_replica, backup).await;
+        spawn_node_tasks(address_primary, primary).await;
+        spawn_node_tasks(address_replica, backup).await;
 
-    sleep(Duration::from_millis(10)).await;
+        sleep(Duration::from_millis(10)).await;
 
-    // get null value
-    let reply = Command::Client(ClientCommand::Get {
-        key: "k1".to_string(),
-    })
-    .send_to(address_primary)
-    .await
-    .unwrap();
-    assert!(reply.is_none());
+        // get null value
+        let reply = Command::Client(ClientCommand::Get {
+            key: "k1".to_string(),
+        })
+        .send_to(address_primary)
+        .await
+        .unwrap();
+        assert!(reply.is_none());
 
-    // set a value on primary
-    let _ = Command::Client(ClientCommand::Set {
-        key: "k1".to_string(),
-        value: "v1".to_string(),
-    })
-    .send_to(address_primary)
-    .await
-    .unwrap();
+        // set a value on primary
+        let _ = Command::Client(ClientCommand::Set {
+            key: "k1".to_string(),
+            value: "v1".to_string(),
+        })
+        .send_to(address_primary)
+        .await
+        .unwrap();
 
-    // // get value on primary
-    // let reply = Command::Client(ClientCommand::Get {
-    //     key: "k1".to_string(),
-    // })
-    // .send_to(address_primary)
-    // .await
-    // .unwrap();
-    // assert!(reply.is_some());
-    // assert_eq!("v1".to_string(), reply.unwrap());
+        sleep(Duration::from_millis(100)).await;
 
-    // get value on replica to make sure it was replicated
-    let reply = Command::Client(ClientCommand::Get {
-        key: "k1".to_string(),
-    })
-    .send_to(address_replica)
-    .await
-    .unwrap();
-    assert!(reply.is_some());
-    assert_eq!("v1".to_string(), reply.unwrap());
-}
+        // get value on primary
+        let reply = Command::Client(ClientCommand::Get {
+            key: "k1".to_string(),
+        })
+        .send_to(address_primary)
+        .await
+        .unwrap();
+        assert!(reply.is_some());
+        assert_eq!("v1".to_string(), reply.unwrap());
+
+        // get value on replica to make sure it was replicated
+        let reply = Command::Client(ClientCommand::Get {
+            key: "k1".to_string(),
+        })
+        .send_to(address_replica)
+        .await
+        .unwrap();
+        assert!(reply.is_some());
+        assert_eq!("v1".to_string(), reply.unwrap());
+    }
 }

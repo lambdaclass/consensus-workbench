@@ -8,7 +8,7 @@ use bytes::Bytes;
 use futures::sink::SinkExt as _;
 use lib::{
     command::{self, ClientCommand},
-    network::{MessageHandler, Writer, SimpleSender},
+    network::{MessageHandler, SimpleSender, Writer},
     store::Store,
 };
 use log::info;
@@ -134,8 +134,10 @@ impl Node {
                 // since we are primary, we lock the command view
 
                 self.lock_command_view(&command_view);
-                let _ = self.handle_lock_message(self.socket_address, command_view.clone()).await;
-                
+                let _ = self
+                    .handle_lock_message(self.socket_address, command_view.clone())
+                    .await;
+
                 let command = NetworkCommand::Propose {
                     command_view: command_view.clone(),
                 };
@@ -145,7 +147,6 @@ impl Node {
                 info!("Received command, broadcasting Propose");
                 self.broadcast_to_others(command).await;
 
-   
                 Ok(None)
             }
 
@@ -297,7 +298,6 @@ impl Node {
 
         // forward the command to all replicas and wait for them to respond
         self.sender.broadcast(self.peers.clone(), message).await;
-
     }
 
     async fn broadcast_to_others(&mut self, network_command: NetworkCommand) {
@@ -314,7 +314,6 @@ impl Node {
 
         // forward the command to all replicas and wait for them to respond
         self.sender.broadcast(other_peers, message).await;
-
     }
 
     async fn send_to_primary(&mut self, cmd: Command) {
