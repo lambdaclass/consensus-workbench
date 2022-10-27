@@ -8,7 +8,7 @@ jobs:
       - uses: Swatinem/rust-cache@v1
       - run: cargo test --verbose
   clippy:
-    runs-on: [self-hosted, nomad]
+    runs-on: [nomad]
     steps:
       - uses: actions/checkout@v2
       - uses: actions-rs/toolchain@v1
