@@ -15,6 +15,8 @@ jobs:
         with:
             toolchain: nightly
             components: clippy
+            args: --all-targets --all-features
+            failure-mode: warnings
       - uses: Swatinem/rust-cache@v1
       - run: cargo +nightly clippy
   format:
