@@ -86,7 +86,7 @@ async fn main() {
                         view: 0,
                         timer_expired: true,
                     });
-                    let _ = blame_message.send_to(address).await;
+                    blame_message.send_to(address).await.unwrap();
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
