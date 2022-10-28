@@ -2,13 +2,13 @@ name: Consensus Workbench CI
 on: push
 jobs:
   tests:
-    runs-on: [self-hosted]
+    runs-on: [nomad]
     steps:
       - uses: actions/checkout@v2
       - uses: Swatinem/rust-cache@v1
       - run: cargo test --verbose
   clippy:
-    runs-on: [self-hosted]
+    runs-on: [nomad]
     steps:
       - uses: actions/checkout@v2
       - uses: actions-rs/toolchain@v1
@@ -19,7 +19,7 @@ jobs:
       - run: apt install -y clang libclang1
       - run: cargo +nightly clippy --all-targets --all-features -- -D warnings
   format:
-    runs-on: [self-hosted]
+    runs-on: [nomad]
     steps:
       - uses: actions/checkout@v2
       - uses: actions-rs/toolchain@v1
