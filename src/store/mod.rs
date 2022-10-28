@@ -29,8 +29,8 @@ impl Store {
         tokio::spawn(async move {
             while let Some((sender, command)) = rx.recv().await {
                 let response = match command {
-                    StoreCommand::Write(key, value) => db.put(&key, &value).and(Ok(Some(value))),
-                    StoreCommand::Read(key) => db.get(&key),
+                    StoreCommand::Write(key, value) => db.put(key, &value).and(Ok(Some(value))),
+                    StoreCommand::Read(key) => db.get(key),
                 };
 
                 // convert internal rocksdb error to anyhow before returning

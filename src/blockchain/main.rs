@@ -270,7 +270,7 @@ mod tests {
             .send_to(address)
             .await
             .unwrap();
-            if reply.is_some() && reply.unwrap() == value.to_string() {
+            if reply.is_some() && reply.unwrap() == value {
                 Ok(())
             } else {
                 Err(())

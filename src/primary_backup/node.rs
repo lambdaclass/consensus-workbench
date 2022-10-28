@@ -9,11 +9,11 @@ use lib::command::ClientCommand;
 use lib::{
     network::{MessageHandler, ReliableSender, Writer},
     store::Store,
+    NetworkReciver, NetworkSender,
 };
 use log::info;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
-use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::oneshot;
 
 /// The types of messages supported by this implementation's state machine.
@@ -93,7 +93,7 @@ impl Node {
 #[derive(Clone)]
 pub struct NodeReceiverHandler {
     /// Used to forward incoming TCP messages to the node
-    pub network_sender: Sender<(Message, oneshot::Sender<Result<Option<Vec<u8>>>>)>,
+    pub network_sender: NetworkSender<Message>,
 }
 
 #[async_trait]
@@ -126,10 +126,7 @@ impl Node {
     }
 
     /// Runs the node to process network messages incoming in the given receiver
-    pub async fn run(
-        &mut self,
-        mut network_receiver: Receiver<(Message, oneshot::Sender<Result<Option<Vec<u8>>>>)>,
-    ) -> () {
+    pub async fn run(&mut self, mut network_receiver: NetworkReciver<Message>) {
         while let Some((message, reply_sender)) = network_receiver.recv().await {
             self.handle_msg(message, reply_sender).await;
         }
@@ -140,7 +137,7 @@ impl Node {
         &mut self,
         message: Message,
         reply_sender: oneshot::Sender<Result<Option<Vec<u8>>>>,
-    ) -> () {
+    ) {
         let result = match (self.state, message) {
             (Primary, Command(Set { key, value })) => {
                 self.forward_to_replicas(Set {

@@ -7,18 +7,18 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::sink::SinkExt as _;
 use lib::{
-    command::{self, ClientCommand},
+    command::ClientCommand,
     network::{MessageHandler, SimpleSender, Writer},
     store::Store,
+    NetworkReciver, NetworkSender,
 };
 use log::info;
 use std::{
     collections::HashSet,
     net::SocketAddr,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, RwLock},
     time::Instant,
 };
-use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::oneshot;
 
 #[derive(Clone)]
@@ -31,15 +31,15 @@ pub struct Node {
 
     // fixme: shared state is wrapped in Arc<RwLock<>>s because this is cloned for every received request
     // in the future, we want to implement a channel-based solution like in some of the other PoCs
-    pub current_view: Arc<RwLock<u128>>,
+    pub current_view: u128,
     pub timer_start: Arc<RwLock<Instant>>,
-    pub command_view_lock: Arc<RwLock<CommandView>>,
+    pub command_view_lock: CommandView,
 
     // the amount of peers which responded with "Lock"
     // note: if we were to create a QC to store in the blockchain,
     // we would need to store signatures from peers here
-    pub lock_responses: Arc<Mutex<HashSet<SocketAddr>>>,
-    pub blame_messages: Arc<Mutex<HashSet<SocketAddr>>>,
+    pub lock_responses: HashSet<SocketAddr>,
+    pub blame_messages: HashSet<SocketAddr>,
 }
 
 /// The state of a node viewed as a state-machine.
@@ -54,7 +54,7 @@ use State::*;
 #[derive(Clone)]
 pub struct NodeReceiverHandler {
     /// Used to forward incoming TCP messages to the node
-    pub network_sender: Sender<(Command, oneshot::Sender<Result<Option<Vec<u8>>>>)>,
+    pub network_sender: NetworkSender<Command>,
 }
 
 #[async_trait]
@@ -87,22 +87,19 @@ impl Node {
     ) -> Self {
         Self {
             store: Store::new(db_path).unwrap(),
-            peers: peers,
+            peers,
             sender: SimpleSender::new(),
-            current_view: Arc::new(RwLock::new(0)),
-            command_view_lock: Arc::new(RwLock::new(CommandView::new())),
-            lock_responses: Arc::new(Mutex::new(HashSet::new())),
-            blame_messages: Arc::new(Mutex::new(HashSet::new())),
+            current_view: 0,
+            command_view_lock: CommandView::new(),
+            lock_responses: HashSet::new(),
+            blame_messages: HashSet::new(),
             socket_address: address,
             timer_start,
         }
     }
 
     /// Runs the node to process network messages incoming in the given receiver
-    pub async fn run(
-        &mut self,
-        mut network_receiver: Receiver<(Command, oneshot::Sender<Result<Option<Vec<u8>>>>)>,
-    ) -> () {
+    pub async fn run(&mut self, mut network_receiver: NetworkReciver<Command>) {
         while let Some((message, reply_sender)) = network_receiver.recv().await {
             self.handle_msg(message, reply_sender).await;
         }
@@ -113,7 +110,7 @@ impl Node {
         &mut self,
         message: Command,
         reply_sender: oneshot::Sender<Result<Option<Vec<u8>>>>,
-    ) -> () {
+    ) {
         let state = self.get_state();
 
         let result = match (state, message) {
@@ -128,15 +125,15 @@ impl Node {
                 // we advance the view according to the primary and propose it
                 let command_view = CommandView {
                     command: client_comand,
-                    view: *self.current_view.read().unwrap() + 1,
+                    view: self.current_view + 1,
                 };
 
                 // since we are primary, we lock the command view
 
                 self.lock_command_view(&command_view);
-                let _ = self
-                    .handle_lock_message(self.socket_address, command_view.clone())
-                    .await;
+                self.handle_lock_message(self.socket_address, command_view.clone())
+                    .await
+                    .unwrap();
 
                 let command = NetworkCommand::Propose {
                     command_view: command_view.clone(),
@@ -171,7 +168,7 @@ impl Node {
 
                 let lock_command = Command::Network(NetworkCommand::Lock {
                     socket_addr: self.socket_address,
-                    command_view: command_view,
+                    command_view,
                 });
 
                 self.send_to_primary(lock_command).await;
@@ -214,7 +211,7 @@ impl Node {
                     highest_lock: _,
                 }),
             ) => {
-                if new_view > *self.current_view.read().unwrap() {
+                if new_view > self.current_view {
                     info!(
                         "{}: View-change performed, primary is {}",
                         self.socket_address,
@@ -249,12 +246,12 @@ impl Node {
         socket_addr: SocketAddr,
         command_view: CommandView,
     ) -> Result<Option<Vec<u8>>, anyhow::Error> {
-        if command_view.view <= *self.current_view.read().unwrap() {
+        if command_view.view <= self.current_view {
             info!("Received command with an old, previously committed view, discarding");
             Ok(None)
         } else {
-            let _ = self.lock_responses.lock().unwrap().insert(socket_addr);
-            let response_count = self.lock_responses.lock().unwrap().len();
+            let _ = self.lock_responses.insert(socket_addr);
+            let response_count = self.lock_responses.len();
 
             // the literature defines quorum as a function of the adversarial threshold we want to support
             // n > f, n > 2f, or n > 3f are the alternatives; this uses n > 2f model
@@ -272,10 +269,8 @@ impl Node {
                     .await
                     .expect("Error committing command as primary");
 
-                self.broadcast_to_others(NetworkCommand::Commit {
-                    command_view: command_view,
-                })
-                .await;
+                self.broadcast_to_others(NetworkCommand::Commit { command_view })
+                    .await;
             }
             Ok(None)
         }
@@ -318,22 +313,20 @@ impl Node {
 
     async fn send_to_primary(&mut self, cmd: Command) {
         let message: Bytes = bincode::serialize(&cmd).unwrap().into();
-        let primary_address = *(self.get_primary(*self.current_view.read().unwrap()));
+        let primary_address = *(self.get_primary(self.current_view));
 
         // forward the command to all replicas and wait for them to respond
-        let _ = self.sender.send(primary_address, message).await;
+        self.sender.send(primary_address, message).await;
     }
 
     async fn try_commit(&mut self, command_view: CommandView) -> Result<Option<Vec<u8>>> {
         *self.timer_start.write().unwrap() = Instant::now();
 
         // handle command, remove command lock (Primray already commits when quorum is achieved)
-        if *self.command_view_lock.read().unwrap() != command_view {
+        if self.command_view_lock != command_view {
             info!(
                 "{}: trying to commit {:?} but we had locked {:?}",
-                self.socket_address,
-                command_view,
-                *self.command_view_lock.read().unwrap()
+                self.socket_address, command_view, self.command_view_lock
             );
             // we are trying to commit something that has not been locked correctly,
             // so there must have been some fault
@@ -342,14 +335,11 @@ impl Node {
             ));
         }
 
-        {
-            let mut lock = self.current_view.write().unwrap(); // update last valid view number
-            *lock = command_view.view;
-        }
+        self.current_view = command_view.view;
+        self.command_view_lock.view += 1;
 
-        self.command_view_lock.write().unwrap().view += 1;
         // handle command
-        self.lock_responses.lock().unwrap().clear();
+        self.lock_responses.clear();
         self.clear_cmd_view_lock();
 
         self.handle_client_command(command_view.command).await
@@ -357,30 +347,27 @@ impl Node {
 
     fn lock_command_view(&mut self, command_view: &CommandView) {
         if command_view.view != 0 {
-            let mut lock = self.command_view_lock.write().unwrap();
-            *lock = command_view.clone();
+            self.command_view_lock = command_view.clone();
         }
         info!(
             "{}: Locked command view {:?}",
-            self.socket_address,
-            *self.command_view_lock.read().unwrap()
+            self.socket_address, self.command_view_lock
         );
     }
 
     pub fn get_state(&self) -> State {
-        if self.get_primary(*self.current_view.read().unwrap()) == &self.socket_address {
+        if self.get_primary(self.current_view) == &self.socket_address {
             return State::Primary;
         }
         State::Backup
     }
 
     fn trigger_view_change(&mut self, new_view: u128) {
-        let mut lock = self.current_view.write().unwrap(); // update last valid view number
-        *lock = new_view;
+        self.current_view = new_view; // update last valid view number
 
-        self.lock_responses.lock().unwrap().clear();
-        self.blame_messages.lock().unwrap().clear();
-        *self.command_view_lock.write().unwrap() = CommandView::new();
+        self.lock_responses.clear();
+        self.blame_messages.clear();
+        self.command_view_lock = CommandView::new();
     }
 
     fn get_primary(&self, view: u128) -> &SocketAddr {
@@ -388,7 +375,7 @@ impl Node {
     }
 
     fn clear_cmd_view_lock(&mut self) {
-        *self.command_view_lock.write().unwrap() = CommandView::new();
+        self.command_view_lock = CommandView::new();
     }
 
     async fn handle_blame(
@@ -397,14 +384,14 @@ impl Node {
         socket_addr: SocketAddr,
         timer_expired: bool,
     ) -> Result<Option<Vec<u8>>> {
-        if view != *self.current_view.read().unwrap() && !timer_expired {
+        if view != self.current_view && !timer_expired {
             return Ok(None);
         }
 
-        let _ = self.blame_messages.lock().unwrap().insert(socket_addr);
-        let blame_count = self.blame_messages.lock().unwrap().len();
+        let _ = self.blame_messages.insert(socket_addr);
+        let blame_count = self.blame_messages.len();
 
-        let highest_view_lock = (self.command_view_lock.read().unwrap()).clone();
+        let highest_view_lock = self.command_view_lock.clone();
 
         // from the docs, f is the amount of omission failures we want to tolerate
         // again, f is defined from the adversarial threshold of the system
@@ -415,7 +402,7 @@ impl Node {
             "Received blame, did we get quorum? {} responses so far vs expected quorum of {} ",
             blame_count, quorum_count
         );
-        let current_view = *self.current_view.read().unwrap();
+        let current_view = self.current_view;
 
         // if we receive enough blames, even if the timer did not go off yet,
         // we send out the blame message

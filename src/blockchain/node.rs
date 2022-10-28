@@ -277,7 +277,7 @@ impl fmt::Display for Message {
                 "State {{ from: {:?}, peers: {:?}, ledger: {} }}",
                 from, peers, ledger
             ),
-            other => write!(f, "{:?}", other),
+            other => write!(f, "{other:?}"),
         }
     }
 }
