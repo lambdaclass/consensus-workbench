@@ -142,7 +142,7 @@ mod tests {
     }
 
     fn db_path(suffix: &str) -> String {
-        format!(".db_test/{}", suffix)
+        format!(".db_test/{suffix}")
     }
 
     #[tokio::test(flavor = "multi_thread")]

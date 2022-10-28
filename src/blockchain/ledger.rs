@@ -48,7 +48,7 @@ impl Block {
             hasher.update(cmd.to_string());
         }
         let hash = hasher.finalize().as_slice().to_owned();
-        hex::encode(&hash)
+        hex::encode(hash)
     }
 
     /// Create a genesis block, which is expected to be the first block of any valid ledger.
