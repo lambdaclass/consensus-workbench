@@ -8,8 +8,8 @@ use lib::{
     command::ClientCommand,
     network::{MessageHandler, Writer},
     store::Store,
+    NetworkReciver, NetworkSender,
 };
-use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::oneshot;
 
 #[derive(Clone)]
@@ -26,10 +26,7 @@ impl Node {
     }
 
     /// Runs the node to process network messages incoming in the given receiver
-    pub async fn run(
-        &mut self,
-        mut network_receiver: Receiver<(ClientCommand, oneshot::Sender<Result<Option<Vec<u8>>>>)>,
-    ) -> () {
+    pub async fn run(&mut self, mut network_receiver: NetworkReciver<ClientCommand>) {
         while let Some((message, reply_sender)) = network_receiver.recv().await {
             self.handle_msg(message, reply_sender).await;
         }
@@ -40,7 +37,7 @@ impl Node {
         &mut self,
         message: ClientCommand,
         reply_sender: oneshot::Sender<Result<Option<Vec<u8>>>>,
-    ) -> () {
+    ) {
         let result = match message {
             ClientCommand::Set { key, value } => {
                 self.store
@@ -49,14 +46,14 @@ impl Node {
             }
             ClientCommand::Get { key } => self.store.read(key.clone().into()).await,
         };
-        let _ = reply_sender.send(result);
+        reply_sender.send(result).unwrap();
     }
 }
 
 #[derive(Clone)]
 pub struct NodeReceiverHandler {
     /// Used to forward incoming TCP messages to the node
-    pub network_sender: Sender<(ClientCommand, oneshot::Sender<Result<Option<Vec<u8>>>>)>,
+    pub network_sender: NetworkSender<ClientCommand>,
 }
 
 #[async_trait]

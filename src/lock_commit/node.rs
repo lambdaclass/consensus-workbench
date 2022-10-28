@@ -7,18 +7,18 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::sink::SinkExt as _;
 use lib::{
-    command::{self, ClientCommand},
+    command::ClientCommand,
     network::{MessageHandler, SimpleSender, Writer},
     store::Store,
+    NetworkReciver, NetworkSender,
 };
 use log::info;
 use std::{
     collections::HashSet,
     net::SocketAddr,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, RwLock},
     time::Instant,
 };
-use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::oneshot;
 
 #[derive(Clone)]
@@ -54,7 +54,7 @@ use State::*;
 #[derive(Clone)]
 pub struct NodeReceiverHandler {
     /// Used to forward incoming TCP messages to the node
-    pub network_sender: Sender<(Command, oneshot::Sender<Result<Option<Vec<u8>>>>)>,
+    pub network_sender: NetworkSender<Command>,
 }
 
 #[async_trait]
@@ -87,7 +87,7 @@ impl Node {
     ) -> Self {
         Self {
             store: Store::new(db_path).unwrap(),
-            peers: peers,
+            peers,
             sender: SimpleSender::new(),
             current_view: 0,
             command_view_lock: CommandView::new(),
@@ -99,10 +99,7 @@ impl Node {
     }
 
     /// Runs the node to process network messages incoming in the given receiver
-    pub async fn run(
-        &mut self,
-        mut network_receiver: Receiver<(Command, oneshot::Sender<Result<Option<Vec<u8>>>>)>,
-    ) -> () {
+    pub async fn run(&mut self, mut network_receiver: NetworkReciver<Command>) {
         while let Some((message, reply_sender)) = network_receiver.recv().await {
             self.handle_msg(message, reply_sender).await;
         }
@@ -113,7 +110,7 @@ impl Node {
         &mut self,
         message: Command,
         reply_sender: oneshot::Sender<Result<Option<Vec<u8>>>>,
-    ) -> () {
+    ) {
         let state = self.get_state();
 
         let result = match (state, message) {
@@ -134,9 +131,9 @@ impl Node {
                 // since we are primary, we lock the command view
 
                 self.lock_command_view(&command_view);
-                let _ = self
-                    .handle_lock_message(self.socket_address, command_view.clone())
-                    .await;
+                self.handle_lock_message(self.socket_address, command_view.clone())
+                    .await
+                    .unwrap();
 
                 let command = NetworkCommand::Propose {
                     command_view: command_view.clone(),
@@ -171,7 +168,7 @@ impl Node {
 
                 let lock_command = Command::Network(NetworkCommand::Lock {
                     socket_addr: self.socket_address,
-                    command_view: command_view,
+                    command_view,
                 });
 
                 self.send_to_primary(lock_command).await;
@@ -272,10 +269,8 @@ impl Node {
                     .await
                     .expect("Error committing command as primary");
 
-                self.broadcast_to_others(NetworkCommand::Commit {
-                    command_view: command_view,
-                })
-                .await;
+                self.broadcast_to_others(NetworkCommand::Commit { command_view })
+                    .await;
             }
             Ok(None)
         }
@@ -321,7 +316,7 @@ impl Node {
         let primary_address = *(self.get_primary(self.current_view));
 
         // forward the command to all replicas and wait for them to respond
-        let _ = self.sender.send(primary_address, message).await;
+        self.sender.send(primary_address, message).await;
     }
 
     async fn try_commit(&mut self, command_view: CommandView) -> Result<Option<Vec<u8>>> {
