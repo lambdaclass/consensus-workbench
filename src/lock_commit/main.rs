@@ -1,14 +1,13 @@
 use clap::Parser;
 use lib::{
-    command::{self, ClientCommand},
+    command::{ClientCommand},
     network::Receiver as NetworkReceiver,
 };
 use log::{info, warn};
-use tokio::sync::mpsc::{self, channel, Receiver, Sender};
 
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
 
@@ -104,7 +103,7 @@ async fn send_command(socket_addr: SocketAddr, command: Command) {
     match command.send_to(socket_addr).await {
         Ok(Some(value)) => info!("{}", value),
         Ok(None) => info!("null"),
-        Err(error) => (warn!("ERROR {}", error)),
+        Err(error) => warn!("ERROR {}", error),
     }
 }
 

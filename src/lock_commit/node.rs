@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::sink::SinkExt as _;
 use lib::{
-    command::{self, ClientCommand},
+    command::{ClientCommand},
     network::{MessageHandler, ReliableSender, Writer},
     store::Store,
 };
@@ -108,7 +108,7 @@ impl MessageHandler for Node {
 
                 let lock_command = Command::Network(NetworkCommand::Lock {
                     socket_addr: self.socket_address,
-                    command_view: command_view,
+                    command_view,
                 });
 
                 self.send_to_primary(lock_command).await;
@@ -195,7 +195,7 @@ impl Node {
     ) -> Self {
         Self {
             store: Store::new(db_path).unwrap(),
-            peers: peers,
+            peers,
             sender: ReliableSender::new(),
             current_view: Arc::new(RwLock::new(0)),
             command_view_lock: Arc::new(RwLock::new(CommandView::new())),
@@ -235,7 +235,7 @@ impl Node {
                     .expect("Error committing command as primary");
 
                 self.broadcast(NetworkCommand::Commit {
-                    command_view: command_view,
+                    command_view,
                 })
                 .await;
             }

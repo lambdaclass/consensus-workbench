@@ -369,7 +369,7 @@ mod tests {
         let block = Block {
             height: 1,
             miner_id: "127.0.0.1:6100".to_string(),
-            previous_hash: Block::genesis().hash.to_string(),
+            previous_hash: Block::genesis().hash,
             hash: "ad260000963facb4d34b6b503d01beba7c58edaf6176b46ca92db75592cd8cf0".to_string(),
             data: vec![],
             nonce: 67048562,
@@ -388,7 +388,7 @@ mod tests {
         let mut block = Block {
             height: 1,
             miner_id: "127.0.0.1:6100".to_string(),
-            previous_hash: Block::genesis().hash.to_string(),
+            previous_hash: Block::genesis().hash,
             hash: "ad260000963facb4d34b6b503d01beba7c58edaf6176b46ca92db75592cd8cf0".to_string(),
             data: vec![],
             nonce: 67048562,
@@ -413,7 +413,7 @@ mod tests {
 
         // fail if invalid block
         block.nonce = 0;
-        ledger.blocks = vec![Block::genesis(), block.clone()];
+        ledger.blocks = vec![Block::genesis(), block];
         assert!(!ledger.is_valid());
     }
 
@@ -452,7 +452,7 @@ mod tests {
         assert!(new_new_block.is_valid());
         assert!(new_new_block.extends(&new_block));
 
-        let ledger = ledger.extend(new_new_block.clone()).unwrap();
+        let ledger = ledger.extend(new_new_block).unwrap();
         assert!(ledger.is_valid());
         assert!(ledger.contains("tx2"));
         assert_eq!("another", &ledger.get("key").unwrap());
