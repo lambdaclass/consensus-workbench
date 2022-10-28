@@ -8,7 +8,7 @@ use bytes::Bytes;
 use futures::sink::SinkExt as _;
 use lib::{
     command::{self, ClientCommand},
-    network::{MessageHandler, ReliableSender, Writer},
+    network::{MessageHandler, SimpleSender, Writer},
     store::Store,
 };
 use log::info;
@@ -18,6 +18,8 @@ use std::{
     sync::{Arc, Mutex, RwLock},
     time::Instant,
 };
+use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::oneshot;
 
 #[derive(Clone)]
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
@@ -25,7 +27,7 @@ pub struct Node {
     pub socket_address: SocketAddr,
     pub store: Store,
     pub peers: Vec<SocketAddr>,
-    pub sender: ReliableSender,
+    pub sender: SimpleSender,
 
     // fixme: shared state is wrapped in Arc<RwLock<>>s because this is cloned for every received request
     // in the future, we want to implement a channel-based solution like in some of the other PoCs
@@ -49,15 +51,72 @@ pub enum State {
 
 use State::*;
 
+#[derive(Clone)]
+pub struct NodeReceiverHandler {
+    /// Used to forward incoming TCP messages to the node
+    pub network_sender: Sender<(Command, oneshot::Sender<Result<Option<Vec<u8>>>>)>,
+}
+
 #[async_trait]
-impl MessageHandler for Node {
+impl MessageHandler for NodeReceiverHandler {
+    /// When a TCP message is received, interpret it as a node::Message and forward it to the node task.
+    /// Send the node's response back through the TCP connection.
     async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
         let request: Command = bincode::deserialize(&bytes)?;
-        info!("{}: Received request {:?}", self.socket_address, &request);
+        log::info!("Received request {:?}", request);
 
+        let (reply_sender, reply_receiver) = oneshot::channel();
+        self.network_sender.send((request, reply_sender)).await?;
+        let reply = reply_receiver.await?.map_err(|e| e.to_string());
+
+        let reply = bincode::serialize(&reply)?;
+        log::info!("Sending response {:?}", reply);
+
+        let _ = writer.send(reply.into()).await?;
+
+        Ok(())
+    }
+}
+
+impl Node {
+    pub fn new(
+        peers: Vec<SocketAddr>,
+        db_path: &str,
+        address: SocketAddr,
+        timer_start: Arc<RwLock<Instant>>,
+    ) -> Self {
+        Self {
+            store: Store::new(db_path).unwrap(),
+            peers: peers,
+            sender: SimpleSender::new(),
+            current_view: Arc::new(RwLock::new(0)),
+            command_view_lock: Arc::new(RwLock::new(CommandView::new())),
+            lock_responses: Arc::new(Mutex::new(HashSet::new())),
+            blame_messages: Arc::new(Mutex::new(HashSet::new())),
+            socket_address: address,
+            timer_start,
+        }
+    }
+
+    /// Runs the node to process network messages incoming in the given receiver
+    pub async fn run(
+        &mut self,
+        mut network_receiver: Receiver<(Command, oneshot::Sender<Result<Option<Vec<u8>>>>)>,
+    ) -> () {
+        while let Some((message, reply_sender)) = network_receiver.recv().await {
+            self.handle_msg(message, reply_sender).await;
+        }
+    }
+
+    /// Process each messages coming from clients and foward events to the replicas
+    pub async fn handle_msg(
+        &mut self,
+        message: Command,
+        reply_sender: oneshot::Sender<Result<Option<Vec<u8>>>>,
+    ) -> () {
         let state = self.get_state();
 
-        let result = match (state, request) {
+        let result = match (state, message) {
             // as a 'hack': to make it simpler, we can just forward the Get command to handle_client_message
             // if you comment this match code block, Get requests will also require quorum but it will still work
             (_, Command::Client(cmd @ ClientCommand::Get { key: _ })) => {
@@ -75,6 +134,9 @@ impl MessageHandler for Node {
                 // since we are primary, we lock the command view
 
                 self.lock_command_view(&command_view);
+                let _ = self
+                    .handle_lock_message(self.socket_address, command_view.clone())
+                    .await;
 
                 let command = NetworkCommand::Propose {
                     command_view: command_view.clone(),
@@ -83,7 +145,8 @@ impl MessageHandler for Node {
                 *self.timer_start.write().unwrap() = Instant::now(); // for blame/view-change
 
                 info!("Received command, broadcasting Propose");
-                self.broadcast(command).await;
+                self.broadcast_to_others(command).await;
+
                 Ok(None)
             }
 
@@ -178,32 +241,7 @@ impl MessageHandler for Node {
             }
         };
 
-        let result: Result<Option<Vec<u8>>, String> = result.map_err(|e| e.to_string());
-        let reply = bincode::serialize(&result)?;
-        let _ = writer.send(reply.into()).await?;
-
-        Ok(())
-    }
-}
-
-impl Node {
-    pub fn new(
-        peers: Vec<SocketAddr>,
-        db_path: &str,
-        address: SocketAddr,
-        timer_start: Arc<RwLock<Instant>>,
-    ) -> Self {
-        Self {
-            store: Store::new(db_path).unwrap(),
-            peers: peers,
-            sender: ReliableSender::new(),
-            current_view: Arc::new(RwLock::new(0)),
-            command_view_lock: Arc::new(RwLock::new(CommandView::new())),
-            lock_responses: Arc::new(Mutex::new(HashSet::new())),
-            blame_messages: Arc::new(Mutex::new(HashSet::new())),
-            socket_address: address,
-            timer_start,
-        }
+        let _ = reply_sender.send(result);
     }
 
     async fn handle_lock_message(
@@ -234,7 +272,7 @@ impl Node {
                     .await
                     .expect("Error committing command as primary");
 
-                self.broadcast(NetworkCommand::Commit {
+                self.broadcast_to_others(NetworkCommand::Commit {
                     command_view: command_view,
                 })
                 .await;
@@ -259,9 +297,7 @@ impl Node {
             .into();
 
         // forward the command to all replicas and wait for them to respond
-        let handlers = self.sender.broadcast(&self.peers, message).await;
-
-        futures::future::join_all(handlers).await;
+        self.sender.broadcast(self.peers.clone(), message).await;
     }
 
     async fn broadcast_to_others(&mut self, network_command: NetworkCommand) {
@@ -277,9 +313,7 @@ impl Node {
             .collect();
 
         // forward the command to all replicas and wait for them to respond
-        let handlers = self.sender.broadcast(&other_peers, message).await;
-
-        futures::future::join_all(handlers).await;
+        self.sender.broadcast(other_peers, message).await;
     }
 
     async fn send_to_primary(&mut self, cmd: Command) {
@@ -287,7 +321,7 @@ impl Node {
         let primary_address = *(self.get_primary(*self.current_view.read().unwrap()));
 
         // forward the command to all replicas and wait for them to respond
-        let _ = self.sender.send(primary_address, message).await.await;
+        let _ = self.sender.send(primary_address, message).await;
     }
 
     async fn try_commit(&mut self, command_view: CommandView) -> Result<Option<Vec<u8>>> {
