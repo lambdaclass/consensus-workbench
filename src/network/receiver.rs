@@ -119,7 +119,7 @@ mod tests {
     #[tokio::test]
     async fn receive() {
         // Make the network receiver.
-        let address = "127.0.0.1:4000".parse::<SocketAddr>().unwrap();
+        let address = "127.0.0.1:7000".parse::<SocketAddr>().unwrap();
         let (tx, mut rx) = channel(1);
         tokio::spawn(async move {
             let receiver = Receiver::new(address, TestHandler { deliver: tx });
