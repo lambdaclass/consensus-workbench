@@ -248,6 +248,8 @@ mod tests {
         assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
 
+        sleep(Duration::from_millis(100)).await;
+
         // get value on replica to make sure it was replicated
         let reply = Command::Client(ClientCommand::Get {
             key: "k1".to_string(),
