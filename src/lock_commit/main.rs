@@ -1,9 +1,7 @@
 use clap::Parser;
-use lib::{
-    command::{ClientCommand},
-    network::Receiver as NetworkReceiver,
-};
+use lib::{command::ClientCommand, network::Receiver as NetworkReceiver};
 use log::{info, warn};
+use tokio::sync::mpsc;
 
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -13,17 +11,21 @@ use std::{
 
 use crate::{
     command_ext::{Command, NetworkCommand},
-    node::{Node, State},
+    node::{Node, NodeReceiverHandler, State},
 };
+
+use tokio::task::JoinHandle;
 
 mod command_ext;
 mod node;
+
+pub const CHANNEL_CAPACITY: usize = 1_000;
 
 #[derive(Parser)]
 #[clap(author, version, about)]
 struct Cli {
     /// The network port of the node where to send txs.
-    #[clap(short, long, value_parser, value_name = "UINT", default_value_t = 6101)]
+    #[clap(short, long, value_parser, value_name = "UINT", default_value_t = 6109)]
     port: u16,
     /// The network address of the node where to send txs.
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
@@ -95,9 +97,25 @@ async fn main() {
         node.socket_address,
         matches!(node.get_state(), State::Primary)
     );
-    NetworkReceiver::new(address, node).run().await;
+
+    let (network_handle, _) = spawn_node_tasks(address, node).await;
+    network_handle.await.unwrap();
 }
 
+async fn spawn_node_tasks(address: SocketAddr, mut node: Node) -> (JoinHandle<()>, JoinHandle<()>) {
+    let (network_sender, network_receiver) = mpsc::channel(CHANNEL_CAPACITY);
+
+    let network_handle = tokio::spawn(async move {
+        node.run(network_receiver).await;
+    });
+
+    let node_handle = tokio::spawn(async move {
+        let receiver = NetworkReceiver::new(address, NodeReceiverHandler { network_sender });
+        receiver.run().await;
+    });
+
+    (network_handle, node_handle)
+}
 async fn send_command(socket_addr: SocketAddr, command: Command) {
     // using a reliable sender to get a response back
     match command.send_to(socket_addr).await {
@@ -127,23 +145,20 @@ mod tests {
         format!(".db_test/{}", suffix)
     }
 
-    #[tokio::test()]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_only_primary_server() {
         let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
         let timer_start = Arc::new(RwLock::new(Instant::now()));
+        fs::remove_dir_all(".db_test_primary1").unwrap_or_default();
+        let node = node::Node::new(
+            vec![address],
+            &db_path("primary1"),
+            address,
+            timer_start.clone(),
+        );
 
-        tokio::spawn(async move {
-            let receiver = NetworkReceiver::new(
-                address,
-                node::Node::new(
-                    vec![address],
-                    &db_path("primary1"),
-                    address,
-                    timer_start.clone(),
-                ),
-            );
-            receiver.run().await;
-        });
+        spawn_node_tasks(address, node).await;
+
         sleep(Duration::from_millis(10)).await;
 
         let reply = Command::Client(ClientCommand::Get {
@@ -181,36 +196,25 @@ mod tests {
         fs::remove_dir_all(".db_test_primary2").unwrap_or_default();
         fs::remove_dir_all(".db_test_backup2").unwrap_or_default();
 
-        fs::remove_dir_all(".db_test_primary2").unwrap_or_default();
-        fs::remove_dir_all(".db_test_backup2").unwrap_or_default();
-
         let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
         let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
-        tokio::spawn(async move {
-            let receiver = NetworkReceiver::new(
-                address_replica,
-                node::Node::new(
-                    vec![address_primary, address_replica],
-                    &db_path("backup2"),
-                    address_replica,
-                    timer_start,
-                ),
-            );
-            receiver.run().await;
-        });
 
-        tokio::spawn(async move {
-            let receiver = NetworkReceiver::new(
-                address_primary,
-                node::Node::new(
-                    vec![address_primary, address_replica],
-                    &db_path("primary2"),
-                    address_primary,
-                    timer_start_secondary,
-                ),
-            );
-            receiver.run().await;
-        });
+        let backup = node::Node::new(
+            vec![address_primary, address_replica],
+            &db_path("backup2"),
+            address_replica,
+            timer_start,
+        );
+
+        let primary = node::Node::new(
+            vec![address_primary, address_replica],
+            &db_path("primary2"),
+            address_primary,
+            timer_start_secondary,
+        );
+
+        spawn_node_tasks(address_primary, primary).await;
+        spawn_node_tasks(address_replica, backup).await;
 
         sleep(Duration::from_millis(10)).await;
 
@@ -231,6 +235,8 @@ mod tests {
         .send_to(address_primary)
         .await
         .unwrap();
+
+        sleep(Duration::from_millis(100)).await;
 
         // get value on primary
         let reply = Command::Client(ClientCommand::Get {

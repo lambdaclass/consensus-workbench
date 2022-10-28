@@ -5,6 +5,7 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::sink::SinkExt as _;
+use lib::command::ClientCommand;
 use lib::{
     network::{MessageHandler, ReliableSender, Writer},
     store::Store,
@@ -12,8 +13,8 @@ use lib::{
 use log::info;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
-
-use lib::command::ClientCommand;
+use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::oneshot;
 
 /// The types of messages supported by this implementation's state machine.
 #[derive(Debug, Serialize, Deserialize)]
@@ -89,13 +90,58 @@ impl Node {
     }
 }
 
+#[derive(Clone)]
+pub struct NodeReceiverHandler {
+    /// Used to forward incoming TCP messages to the node
+    pub network_sender: Sender<(Message, oneshot::Sender<Result<Option<Vec<u8>>>>)>,
+}
+
 #[async_trait]
-impl MessageHandler for Node {
+impl MessageHandler for NodeReceiverHandler {
+    /// When a TCP message is received, interpret it as a node::Message and forward it to the node task.
+    /// Send the node's response back through the TCP connection.
     async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
         let request = Message::deserialize(bytes)?;
-        info!("Received request {:?}", request);
+        log::info!("Received request {:?}", request);
 
-        let result = match (self.state, request) {
+        let (reply_sender, reply_receiver) = oneshot::channel();
+        self.network_sender.send((request, reply_sender)).await?;
+        let reply = reply_receiver.await?.map_err(|e| e.to_string());
+
+        let reply = bincode::serialize(&reply)?;
+        log::info!("Sending response {:?}", reply);
+
+        Ok(writer.send(reply.into()).await?)
+    }
+}
+
+impl Node {
+    async fn forward_to_replicas(&mut self, command: ClientCommand) {
+        let sync_message: Bytes = bincode::serialize(&command).unwrap().into();
+
+        // forward the command to all replicas and wait for them to respond
+        info!("Forwarding set to {:?}", self.peers);
+        let handlers = self.sender.broadcast(&self.peers, sync_message).await;
+        futures::future::join_all(handlers).await;
+    }
+
+    /// Runs the node to process network messages incoming in the given receiver
+    pub async fn run(
+        &mut self,
+        mut network_receiver: Receiver<(Message, oneshot::Sender<Result<Option<Vec<u8>>>>)>,
+    ) -> () {
+        while let Some((message, reply_sender)) = network_receiver.recv().await {
+            self.handle_msg(message, reply_sender).await;
+        }
+    }
+
+    /// Process each messages coming from clients and foward events to the replicas
+    pub async fn handle_msg(
+        &mut self,
+        message: Message,
+        reply_sender: oneshot::Sender<Result<Option<Vec<u8>>>>,
+    ) -> () {
+        let result = match (self.state, message) {
             (Primary, Command(Set { key, value })) => {
                 self.forward_to_replicas(Set {
                     key: key.clone(),
@@ -122,23 +168,6 @@ impl MessageHandler for Node {
             (_, Command(Get { key })) => self.store.read(key.clone().into()).await,
             _ => Err(anyhow!("Unhandled command")),
         };
-
-        // convert the error into something serializable
-        let result = result.map_err(|e| e.to_string());
-
-        info!("Sending response {:?}", result);
-        let reply = bincode::serialize(&result)?;
-        Ok(writer.send(reply.into()).await?)
-    }
-}
-
-impl Node {
-    async fn forward_to_replicas(&mut self, command: ClientCommand) {
-        let sync_message: Bytes = bincode::serialize(&command).unwrap().into();
-
-        // forward the command to all replicas and wait for them to respond
-        info!("Forwarding set to {:?}", self.peers);
-        let handlers = self.sender.broadcast(&self.peers, sync_message).await;
-        futures::future::join_all(handlers).await;
+        let _ = reply_sender.send(result);
     }
 }

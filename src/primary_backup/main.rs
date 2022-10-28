@@ -1,13 +1,16 @@
 use bytes::Bytes;
 use clap::Parser;
-use lib::network::Receiver;
+use lib::network::Receiver as NetworkReceiver;
 use lib::network::SimpleSender;
 use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
-use crate::node::{Message, Node};
+use crate::node::{Message, Node, NodeReceiverHandler};
 
 mod node;
+pub const CHANNEL_CAPACITY: usize = 1_000;
 
 #[derive(Parser)]
 #[clap(author, version, about)]
@@ -67,12 +70,23 @@ async fn main() {
         Node::primary(&db_name)
     };
 
-    tokio::spawn(async move {
-        let receiver = Receiver::new(address, node);
+    let (network_handle, _) = spawn_node_tasks(address, node).await;
+    network_handle.await.unwrap();
+}
+
+async fn spawn_node_tasks(address: SocketAddr, mut node: Node) -> (JoinHandle<()>, JoinHandle<()>) {
+    let (network_sender, network_receiver) = mpsc::channel(CHANNEL_CAPACITY);
+
+    let network_handle = tokio::spawn(async move {
+        node.run(network_receiver).await;
+    });
+
+    let node_handle = tokio::spawn(async move {
+        let receiver = NetworkReceiver::new(address, NodeReceiverHandler { network_sender });
         receiver.run().await;
-    })
-    .await
-    .unwrap();
+    });
+
+    (network_handle, node_handle)
 }
 
 fn db_name(cli: &Cli, default: &str) -> String {
@@ -108,11 +122,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_only_primary_server() {
         let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
-
-        tokio::spawn(async move {
-            let receiver = Receiver::new(address, node::Node::primary(&db_path("primary1")));
-            receiver.run().await;
-        });
+        let node = node::Node::primary(&db_path("primary1"));
+        spawn_node_tasks(address, node).await;
         sleep(Duration::from_millis(10)).await;
 
         let reply = ClientCommand::Get {
@@ -145,20 +156,14 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_replicated_server() {
-        fs::remove_dir_all(".db_test_primary2").unwrap_or_default();
-        fs::remove_dir_all(".db_test_backup2").unwrap_or_default();
-
         let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
         let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
-        tokio::spawn(async move {
-            let receiver = Receiver::new(address_replica, node::Node::backup(&db_path("backup2")));
-            receiver.run().await;
-        });
-        tokio::spawn(async move {
-            let receiver =
-                Receiver::new(address_primary, node::Node::primary(&db_path("primary2")));
-            receiver.run().await;
-        });
+
+        let primary = node::Node::primary(&db_path("db_test_primary2"));
+        spawn_node_tasks(address_primary, primary).await;
+
+        let backup = node::Node::backup(&db_path("db_test_backup2"));
+        spawn_node_tasks(address_replica, backup).await;
 
         // TODO: this "Subscribe" message is sent here for testing purposes.
         //       But it shouldn't be here. We should have an initialization loop

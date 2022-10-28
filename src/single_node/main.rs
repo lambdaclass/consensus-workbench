@@ -1,17 +1,15 @@
 /// This modules implements the most basic form of distributed system, a single node server that handles
 /// client requests to a key/value store. There is no replication and this no fault-tolerance.
-use anyhow::Result;
-use async_trait::async_trait;
-use bytes::Bytes;
 use clap::Parser;
-use futures::sink::SinkExt as _;
-use lib::{
-    command::ClientCommand,
-    network::{MessageHandler, Receiver, Writer},
-    store::Store,
-};
-use log::info;
+use lib::network::Receiver as NetworkReceiver;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+
+use crate::node::{Node, NodeReceiverHandler};
+
+mod node;
+pub const CHANNEL_CAPACITY: usize = 1_000;
 
 #[derive(Parser)]
 #[clap(author, version, about)]
@@ -24,71 +22,53 @@ struct Cli {
     address: IpAddr,
 }
 
-#[derive(Clone)]
-/// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
-struct Node {
-    pub store: Store,
-}
-
-#[async_trait]
-impl MessageHandler for Node {
-    async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
-        let request: ClientCommand = bincode::deserialize(&bytes)?;
-        info!("Received request {:?}", request);
-
-        let result = match request {
-            ClientCommand::Set { key, value } => {
-                self.store
-                    .write(key.clone().into(), value.clone().into())
-                    .await
-            }
-            ClientCommand::Get { key } => self.store.read(key.clone().into()).await,
-        };
-
-        // convert the error into something serializable
-        let result = result.map_err(|e| e.to_string());
-
-        info!("Sending response {:?}", result);
-        let reply = bincode::serialize(&result)?;
-        Ok(writer.send(reply.into()).await?)
-    }
-}
-
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let cli = Cli::parse();
 
-    info!("Node socket: {}:{}", cli.address, cli.port);
+    log::info!("Node socket: {}:{}", cli.address, cli.port);
 
     simple_logger::SimpleLogger::new().env().init().unwrap();
 
     let address = SocketAddr::new(cli.address, cli.port);
-    let store = Store::new(".db_single_node").unwrap();
-    tokio::spawn(async move {
-        let receiver = Receiver::new(address, Node { store });
+
+    let (network_handle, _) = spawn_node_tasks(address).await;
+
+    network_handle.await.unwrap();
+}
+
+async fn spawn_node_tasks(address: SocketAddr) -> (JoinHandle<()>, JoinHandle<()>) {
+    let (network_sender, network_receiver) = mpsc::channel(CHANNEL_CAPACITY);
+
+    let newtor_handle = tokio::spawn(async move {
+        let mut node = Node::new();
+        node.run(network_receiver).await;
+    });
+
+    let node_handle = tokio::spawn(async move {
+        let receiver = NetworkReceiver::new(address, NodeReceiverHandler { network_sender });
         receiver.run().await;
     });
+
+    (newtor_handle, node_handle)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lib::command::ClientCommand;
     use std::fs;
     use tokio::time::{sleep, Duration};
+    use tokio_retry::strategy::FixedInterval;
+    use tokio_retry::Retry;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_server() {
-        let db_path = ".db_test";
-        fs::remove_dir_all(db_path).unwrap_or_default();
-        let store = Store::new(db_path).unwrap();
-
-        simple_logger::SimpleLogger::new().env().init().unwrap();
+        fs::remove_dir_all(".db_single_node").unwrap_or_default();
 
         let address: SocketAddr = "127.0.0.1:6182".parse().unwrap();
-        tokio::spawn(async move {
-            let receiver = Receiver::new(address, Node { store });
-            receiver.run().await;
-        });
+        spawn_node_tasks(address).await;
+
         sleep(Duration::from_millis(10)).await;
 
         let reply = ClientCommand::Get {
@@ -136,5 +116,26 @@ mod tests {
         .unwrap();
         assert!(reply.is_some());
         assert_eq!("v2".to_string(), reply.unwrap());
+    }
+
+    /// Send Get commands to the given address with delayed retries to give it time for a transaction
+    /// to propagate. Fails if the expected value isn't read after 20 seconds.
+    async fn assert_eventually_equals(address: SocketAddr, key: &str, value: &str) {
+        let retries = FixedInterval::from_millis(100).take(200);
+        let reply = Retry::spawn(retries, || async {
+            let reply = ClientCommand::Get {
+                key: key.to_string(),
+            }
+            .send_to(address)
+            .await
+            .unwrap();
+            if reply.is_some() && reply.unwrap() == value.to_string() {
+                Ok(())
+            } else {
+                Err(())
+            }
+        })
+        .await;
+        assert!(reply.is_ok());
     }
 }
