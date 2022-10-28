@@ -331,9 +331,7 @@ impl Node {
         if self.command_view_lock != command_view {
             info!(
                 "{}: trying to commit {:?} but we had locked {:?}",
-                self.socket_address,
-                command_view,
-                self.command_view_lock
+                self.socket_address, command_view, self.command_view_lock
             );
             // we are trying to commit something that has not been locked correctly,
             // so there must have been some fault
@@ -358,8 +356,7 @@ impl Node {
         }
         info!(
             "{}: Locked command view {:?}",
-            self.socket_address,
-            self.command_view_lock
+            self.socket_address, self.command_view_lock
         );
     }
 
