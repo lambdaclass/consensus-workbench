@@ -18,7 +18,7 @@ use std::{
     collections::HashSet,
     net::SocketAddr,
     sync::{Arc, RwLock},
-    time::{Instant, Duration, self},
+    time::{self, Duration, Instant},
 };
 use tokio::sync::oneshot;
 
@@ -87,8 +87,7 @@ impl Node {
         peers: Vec<SocketAddr>,
         db_path: &str,
         address: SocketAddr,
-        view_change_delta_ms: Option<u16>
-     //   timer_start: Arc<RwLock<Instant>>,
+        view_change_delta_ms: Option<u16>, //   timer_start: Arc<RwLock<Instant>>,
     ) -> Self {
         Self {
             store: Store::new(db_path).unwrap(),
@@ -110,24 +109,23 @@ impl Node {
             let timer_duration = self.view_change_delta_ms.unwrap();
 
             let delta = Duration::from_millis(timer_duration.into());
-                if self.timer_start.elapsed() > delta * 8 {
-                    self.timer_start = Instant::now();
-                    info!("{}: timer expired!",self.socket_address );
-                    self.blame_messages.insert(self.socket_address);
-                }
-                tokio::time::sleep(Duration::from_millis(50)).await;
+            if self.timer_start.elapsed() > delta * 8 {
+                self.timer_start = Instant::now();
+                info!("{}: timer expired!", self.socket_address);
+                self.blame_messages.insert(self.socket_address);
             }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
-
 
     /// Runs the node to process network messages incoming in the given receiver, and starts a timer for view-change if required
     pub async fn run(&mut self, mut network_receiver: NetworkReceiver<Command>) {
-loop {
-        tokio::select! {
-            Some((message, reply_sender)) = network_receiver.recv() => self.handle_msg(message, reply_sender).await,
-            () = self.check_timer() => (),
+        loop {
+            tokio::select! {
+                Some((message, reply_sender)) = network_receiver.recv() => self.handle_msg(message, reply_sender).await,
+                () = self.check_timer() => (),
+            }
         }
-    }
     }
 
     /// Process each messages coming from clients and foward events to the replicas
@@ -164,7 +162,7 @@ loop {
                     command_view: command_view.clone(),
                 };
 
-                *self.timer_start.write().unwrap() = Instant::now(); // for blame/view-change
+                self.timer_start = Instant::now(); // for blame/view-change
 
                 info!("Received command, broadcasting Propose");
                 self.broadcast_to_others(command).await;
@@ -242,7 +240,7 @@ loop {
                         self.socket_address,
                         self.get_primary(new_view)
                     );
-                    *self.timer_start.write().unwrap() = Instant::now();
+                    self.timer_start = Instant::now();
                     self.trigger_view_change(new_view);
                 }
                 Ok(None)
@@ -286,7 +284,7 @@ loop {
                 "Received lock, did we get quorum? {} responses so far vs expected quorum of {} ",
                 response_count, quorum_count
             );
-            *self.timer_start.write().unwrap() = Instant::now();
+            self.timer_start = Instant::now();
             // broadcast commit, then try commit
             if response_count >= quorum_count {
                 info!("Quorum achieved, commiting first and sending out Commit message!");
@@ -345,7 +343,7 @@ loop {
     }
 
     async fn try_commit(&mut self, command_view: CommandView) -> Result<Option<Vec<u8>>> {
-        *self.timer_start.write().unwrap() = Instant::now();
+        self.timer_start = Instant::now();
 
         // handle command, remove command lock (Primray already commits when quorum is achieved)
         if self.command_view_lock != command_view {

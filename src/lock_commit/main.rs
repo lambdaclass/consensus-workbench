@@ -3,14 +3,10 @@ use lib::{command::ClientCommand, network::Receiver as NetworkReceiver};
 use log::{info, warn};
 use tokio::sync::mpsc;
 
-use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::{Arc, RwLock},
-    time::{Duration, Instant},
-};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use crate::{
-    command_ext::{Command, NetworkCommand},
+    command_ext::Command,
     node::{Node, NodeReceiverHandler, State},
 };
 
@@ -57,7 +53,6 @@ async fn main() {
 
     simple_logger::SimpleLogger::new().env().init().unwrap();
 
-    let timer_start = Instant::now();
     let address = SocketAddr::new(cli.address, cli.port);
 
     // because the Client application does not work with this (sends a ClientCommand not wrapped in Command())
@@ -69,7 +64,8 @@ async fn main() {
     let node = Node::new(
         cli.peers,
         &format!(".db_{}", address.port()),
-        address
+        address,
+        cli.view_change_delta_ms,
     );
 
     info!(
@@ -82,7 +78,7 @@ async fn main() {
     network_handle.await.unwrap();
 }
 
-async fn spawn_node_tasks(address: SocketAddr, mut node: Node, view_change_delta: Option<u16>) -> (JoinHandle<()>, JoinHandle<()>) {
+async fn spawn_node_tasks(address: SocketAddr, mut node: Node) -> (JoinHandle<()>, JoinHandle<()>) {
     let (network_sender, network_receiver) = mpsc::channel(CHANNEL_CAPACITY);
 
     let network_handle = tokio::spawn(async move {
@@ -94,11 +90,6 @@ async fn spawn_node_tasks(address: SocketAddr, mut node: Node, view_change_delta
         receiver.run().await;
     });
 
-    if view_change_delta.is_some() {
-        let task = tokio::spawn(async move {
-            node.run_timer_task(view_change_delta.unwrap());
-        });
-    }
     (network_handle, node_handle)
 }
 async fn send_command(socket_addr: SocketAddr, command: Command) {
@@ -133,14 +124,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_only_primary_server() {
         let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
-        let timer_start = Arc::new(RwLock::new(Instant::now()));
         fs::remove_dir_all(".db_test_primary1").unwrap_or_default();
-        let node = node::Node::new(
-            vec![address],
-            &db_path("primary1"),
-            address,
-            timer_start.clone(),
-        );
+        let node = node::Node::new(vec![address], &db_path("primary1"), address, None);
 
         spawn_node_tasks(address, node).await;
 
@@ -176,8 +161,6 @@ mod tests {
 
     #[tokio::test()]
     async fn test_replicated_server() {
-        let timer_start = Arc::new(RwLock::new(Instant::now()));
-        let timer_start_secondary = Arc::new(RwLock::new(Instant::now()));
         fs::remove_dir_all(".db_test_primary2").unwrap_or_default();
         fs::remove_dir_all(".db_test_backup2").unwrap_or_default();
 
@@ -188,14 +171,14 @@ mod tests {
             vec![address_primary, address_replica],
             &db_path("backup2"),
             address_replica,
-            timer_start,
+            None,
         );
 
         let primary = node::Node::new(
             vec![address_primary, address_replica],
             &db_path("primary2"),
             address_primary,
-            timer_start_secondary,
+            None,
         );
 
         spawn_node_tasks(address_primary, primary).await;
