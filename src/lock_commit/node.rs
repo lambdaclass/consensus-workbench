@@ -13,11 +13,9 @@ use lib::{
     NetworkReceiver, NetworkSender,
 };
 use log::info;
-use serde::de::IntoDeserializer;
 use std::{
     collections::HashSet,
     net::SocketAddr,
-    sync::{Arc, RwLock},
     time::{self, Duration, Instant},
 };
 use tokio::sync::oneshot;
