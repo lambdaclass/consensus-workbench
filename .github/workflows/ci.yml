@@ -10,7 +10,6 @@ jobs:
             toolchain: nightly
             profile: minimal
       - uses: Swatinem/rust-cache@v1
-      - run: apt install -y clang libclang1
       - run: cargo test --verbose
   clippy:
     runs-on: [self-hosted, nomad]
