@@ -1,22 +1,15 @@
 /// This module is a binary that listens for TCP connections, runs a node and forwards to it incoming client and peer messages.
-use anyhow::Result;
-use async_trait::async_trait;
-use bytes::Bytes;
 use clap::Parser;
-use futures::SinkExt;
-use lib::network::{MessageHandler, Receiver as NetworkReceiver, Writer};
 use log::info;
+use receiver::Receiver;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use tokio::sync::mpsc::{channel, Sender};
-use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::node::Node;
 
 mod ledger;
 mod node;
-
-pub const CHANNEL_CAPACITY: usize = 1_000;
+mod receiver;
 
 #[derive(Parser)]
 #[clap(author, version, about)]
@@ -40,52 +33,41 @@ async fn main() {
 
     simple_logger::SimpleLogger::new().env().init().unwrap();
 
-    let address = SocketAddr::new(cli.address, cli.port);
+    let network_address = SocketAddr::new(cli.address, cli.port);
+    // FIXME lazily assuming +1000 for client port. move to CLI if anyone cares about it
+    let client_address = SocketAddr::new(cli.address, cli.port + 1000);
 
-    let (network_handle, _) = spawn_node_tasks(address, cli.seed).await;
+    let (_, network_handle, _) = spawn_node_tasks(network_address, client_address, cli.seed).await;
 
     network_handle.await.unwrap();
 }
 
-/// Spawn the network receiver and a blockchain node with a channel to pass messages from one to the other.
+/// Spawn the client and network receivers and a blockchain node that listents to messages from both.
 async fn spawn_node_tasks(
-    address: SocketAddr,
+    network_address: SocketAddr,
+    client_address: SocketAddr,
     seed: Option<SocketAddr>,
-) -> (JoinHandle<()>, JoinHandle<()>) {
-    let (network_sender, network_receiver) = channel(CHANNEL_CAPACITY);
-
+) -> (JoinHandle<()>, JoinHandle<()>, JoinHandle<()>) {
+    // listen for peer network tcp connections
+    let (network_tcp_receiver, network_channel_receiver) = Receiver::new(network_address);
     let network_handle = tokio::spawn(async move {
-        let mut node = Node::new(address, seed);
-        node.run(network_receiver).await;
+        network_tcp_receiver.run().await;
     });
 
+    // listen for client command tcp connections
+    let (client_tcp_receiver, client_channel_receiver) = Receiver::new(client_address);
+    let client_handle = tokio::spawn(async move {
+        client_tcp_receiver.run().await;
+    });
+
+    // run a task to manage the blockchain node state, listening for messages from client and network
+    let mut node = Node::new(network_address, seed);
     let node_handle = tokio::spawn(async move {
-        let receiver = NetworkReceiver::new(address, NodeReceiverHandler { network_sender });
-        receiver.run().await;
+        node.run(network_channel_receiver, client_channel_receiver)
+            .await;
     });
 
-    (network_handle, node_handle)
-}
-
-#[derive(Clone)]
-struct NodeReceiverHandler {
-    /// Used to forward incoming TCP messages to the node
-    network_sender: Sender<(node::Message, oneshot::Sender<Result<Option<String>>>)>,
-}
-
-#[async_trait]
-impl MessageHandler for NodeReceiverHandler {
-    /// When a TCP message is received, interpret it as a node::Message and forward it to the node task.
-    /// Send the node's response back through the TCP connection.
-    async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
-        let request = node::Message::deserialize(bytes)?;
-
-        let (reply_sender, reply_receiver) = oneshot::channel();
-        self.network_sender.send((request, reply_sender)).await?;
-        let reply = reply_receiver.await?.map_err(|e| e.to_string());
-        let reply = bincode::serialize(&reply)?;
-        Ok(writer.send(reply.into()).await?)
-    }
+    (node_handle, network_handle, client_handle)
 }
 
 #[cfg(test)]
@@ -104,14 +86,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn single_node() {
-        let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
-        spawn_node_tasks(address, None).await;
+        let network_address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
+        let client_address: SocketAddr = "127.0.0.1:7379".parse().unwrap();
+        spawn_node_tasks(network_address, client_address, None).await;
 
         // get k1 -> null
         let reply = ClientCommand::Get {
             key: "k1".to_string(),
         }
-        .send_to(address)
+        .send_to(client_address)
         .await
         .unwrap();
         assert!(reply.is_none());
@@ -121,145 +104,159 @@ mod tests {
             key: "k1".to_string(),
             value: "v1".to_string(),
         }
-        .send_to(address)
+        .send_to(client_address)
         .await
         .unwrap();
         assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
 
         // eventually value gets into a block and get k1 -> v1
-        assert_eventually_equals(address, "k1", "v1").await;
+        assert_eventually_equals(client_address, "k1", "v1").await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn multiple_nodes() {
-        let address1: SocketAddr = "127.0.0.1:6279".parse().unwrap();
-        let address2: SocketAddr = "127.0.0.1:6289".parse().unwrap();
-        let address3: SocketAddr = "127.0.0.1:6299".parse().unwrap();
-        spawn_node_tasks(address1, None).await;
-        spawn_node_tasks(address2, Some(address1)).await;
-        spawn_node_tasks(address3, Some(address1)).await;
+        let network_address1: SocketAddr = "127.0.0.1:6279".parse().unwrap();
+        let network_address2: SocketAddr = "127.0.0.1:6289".parse().unwrap();
+        let network_address3: SocketAddr = "127.0.0.1:6299".parse().unwrap();
+
+        let client_address1: SocketAddr = "127.0.0.1:7279".parse().unwrap();
+        let client_address2: SocketAddr = "127.0.0.1:7289".parse().unwrap();
+        let client_address3: SocketAddr = "127.0.0.1:7299".parse().unwrap();
+        spawn_node_tasks(network_address1, client_address1, None).await;
+        spawn_node_tasks(network_address2, client_address2, Some(network_address1)).await;
+        spawn_node_tasks(network_address3, client_address3, Some(network_address1)).await;
 
         ClientCommand::Set {
             key: "k1".to_string(),
             value: "v1".to_string(),
         }
-        .send_to(address1)
+        .send_to(client_address1)
         .await
         .unwrap();
 
         // eventually value gets into a block and get k1 -> v1 (in all nodes)
-        assert_eventually_equals(address1, "k1", "v1").await;
-        assert_eventually_equals(address2, "k1", "v1").await;
-        assert_eventually_equals(address3, "k1", "v1").await;
+        assert_eventually_equals(client_address1, "k1", "v1").await;
+        assert_eventually_equals(client_address2, "k1", "v1").await;
+        assert_eventually_equals(client_address3, "k1", "v1").await;
 
         // set k=v2 (another node) -> eventually v2 in 1
         ClientCommand::Set {
             key: "k1".to_string(),
             value: "v2".to_string(),
         }
-        .send_to(address2)
+        .send_to(client_address2)
         .await
         .unwrap();
-        assert_eventually_equals(address1, "k1", "v2").await;
-        assert_eventually_equals(address2, "k1", "v2").await;
-        assert_eventually_equals(address3, "k1", "v2").await;
+        assert_eventually_equals(client_address1, "k1", "v2").await;
+        assert_eventually_equals(client_address2, "k1", "v2").await;
+        assert_eventually_equals(client_address3, "k1", "v2").await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn new_node_catch_up() {
         // start two nodes
-        let address1: SocketAddr = "127.0.0.1:6179".parse().unwrap();
-        let address2: SocketAddr = "127.0.0.1:6189".parse().unwrap();
-        spawn_node_tasks(address1, None).await;
-        spawn_node_tasks(address2, Some(address1)).await;
+        let network_address1: SocketAddr = "127.0.0.1:6179".parse().unwrap();
+        let network_address2: SocketAddr = "127.0.0.1:6189".parse().unwrap();
+
+        let client_address1: SocketAddr = "127.0.0.1:7179".parse().unwrap();
+        let client_address2: SocketAddr = "127.0.0.1:7189".parse().unwrap();
+        spawn_node_tasks(network_address1, client_address1, None).await;
+        spawn_node_tasks(network_address2, client_address2, Some(network_address1)).await;
 
         ClientCommand::Set {
             key: "k1".to_string(),
             value: "v1".to_string(),
         }
-        .send_to(address1)
+        .send_to(client_address1)
         .await
         .unwrap();
 
         // eventually value gets into a block and get k1 -> v1 (in all nodes)
-        assert_eventually_equals(address1, "k1", "v1").await;
-        assert_eventually_equals(address2, "k1", "v1").await;
+        assert_eventually_equals(client_address1, "k1", "v1").await;
+        assert_eventually_equals(client_address2, "k1", "v1").await;
 
         // set k=v2 (another node) -> eventually v2 in 1
         ClientCommand::Set {
             key: "k1".to_string(),
             value: "v2".to_string(),
         }
-        .send_to(address2)
+        .send_to(client_address2)
         .await
         .unwrap();
-        assert_eventually_equals(address1, "k1", "v2").await;
-        assert_eventually_equals(address2, "k1", "v2").await;
+        assert_eventually_equals(client_address1, "k1", "v2").await;
+        assert_eventually_equals(client_address2, "k1", "v2").await;
 
         // start another node, which should eventually catch up with the longest chain from its peers
-        let address3: SocketAddr = "127.0.0.1:6199".parse().unwrap();
-        spawn_node_tasks(address3, Some(address1)).await;
-        assert_eventually_equals(address3, "k1", "v2").await;
+        let network_address3: SocketAddr = "127.0.0.1:6199".parse().unwrap();
+        let client_address3: SocketAddr = "127.0.0.1:7199".parse().unwrap();
+        spawn_node_tasks(network_address3, client_address3, Some(network_address1)).await;
+        assert_eventually_equals(client_address3, "k1", "v2").await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn node_crash_recover() {
-        let address1: SocketAddr = "127.0.0.1:6579".parse().unwrap();
-        let address2: SocketAddr = "127.0.0.1:6589".parse().unwrap();
-        let address3: SocketAddr = "127.0.0.1:6599".parse().unwrap();
+        let network_address1: SocketAddr = "127.0.0.1:6579".parse().unwrap();
+        let network_address2: SocketAddr = "127.0.0.1:6589".parse().unwrap();
+        let network_address3: SocketAddr = "127.0.0.1:6599".parse().unwrap();
 
-        spawn_node_tasks(address1, None).await;
+        let client_address1: SocketAddr = "127.0.0.1:7579".parse().unwrap();
+        let client_address2: SocketAddr = "127.0.0.1:7589".parse().unwrap();
+        let client_address3: SocketAddr = "127.0.0.1:7599".parse().unwrap();
+
+        spawn_node_tasks(network_address1, client_address1, None).await;
         // keep the handles to abort later
-        let (network_handle, node_handle) = spawn_node_tasks(address2, Some(address1)).await;
-        spawn_node_tasks(address3, Some(address1)).await;
+        let (node_handle, network_handle, client_handle) =
+            spawn_node_tasks(network_address2, client_address2, Some(network_address1)).await;
+        spawn_node_tasks(network_address3, client_address3, Some(network_address1)).await;
 
         ClientCommand::Set {
             key: "k1".to_string(),
             value: "v1".to_string(),
         }
-        .send_to(address1)
+        .send_to(client_address1)
         .await
         .unwrap();
 
         // eventually value gets into a block and get k1 -> v1 (in all nodes)
-        assert_eventually_equals(address1, "k1", "v1").await;
-        assert_eventually_equals(address2, "k1", "v1").await;
-        assert_eventually_equals(address3, "k1", "v1").await;
+        assert_eventually_equals(client_address1, "k1", "v1").await;
+        assert_eventually_equals(client_address2, "k1", "v1").await;
+        assert_eventually_equals(client_address3, "k1", "v1").await;
 
         // abort the 2nd node
         network_handle.abort();
         node_handle.abort();
+        client_handle.abort();
 
         // send another transaction
         ClientCommand::Set {
             key: "k1".to_string(),
             value: "v2".to_string(),
         }
-        .send_to(address1)
+        .send_to(client_address1)
         .await
         .unwrap();
 
         // the nodes that are still alive eventually update the value
-        assert_eventually_equals(address1, "k1", "v2").await;
-        assert_eventually_equals(address3, "k1", "v2").await;
+        assert_eventually_equals(client_address3, "k1", "v2").await;
+        assert_eventually_equals(client_address1, "k1", "v2").await;
 
         // start the second node again
-        spawn_node_tasks(address2, Some(address1)).await;
+        spawn_node_tasks(network_address2, client_address2, Some(network_address1)).await;
 
         // send a new transaction to the fresh right away
         ClientCommand::Set {
             key: "k1".to_string(),
             value: "v3".to_string(),
         }
-        .send_to(address2)
+        .send_to(client_address2)
         .await
         .unwrap();
 
         // the agreed ledger should eventually include the last transaction
-        assert_eventually_equals(address1, "k1", "v3").await;
-        assert_eventually_equals(address2, "k1", "v3").await;
-        assert_eventually_equals(address3, "k1", "v3").await;
+        assert_eventually_equals(client_address1, "k1", "v3").await;
+        assert_eventually_equals(client_address2, "k1", "v3").await;
+        assert_eventually_equals(client_address3, "k1", "v3").await;
     }
 
     /// Send Get commands to the given address with delayed retries to give it time for a transaction

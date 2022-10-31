@@ -1,6 +1,6 @@
 /// This module contains the definition of a node in a blockchain p2p network, where each node maintains
 /// a ledger of key/value store transactions, as well of the network messages supported between nodes.
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use bytes::Bytes;
 use core::fmt;
 use lib::network::SimpleSender;
@@ -12,7 +12,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
-use lib::command::ClientCommand;
+use lib::command::{ClientCommand, CommandResult};
 
 /// The types of messages supported by this implementation's state machine.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -95,7 +95,8 @@ impl Node {
     /// task to produce blocks to extend the node's ledger.
     pub async fn run(
         &mut self,
-        mut network_receiver: Receiver<(Message, oneshot::Sender<Result<Option<String>>>)>,
+        mut network_receiver: Receiver<(Message, oneshot::Sender<()>)>,
+        mut client_receiver: Receiver<(ClientCommand, oneshot::Sender<CommandResult>)>,
     ) -> JoinHandle<()> {
         self.restart_miner();
 
@@ -115,15 +116,25 @@ impl Node {
                         self.update_ledger(new_ledger).await;
                     };
                 }
-                Some((message, reply_sender)) = network_receiver.recv() => {
-                    let result = self.handle_message(message.clone()).await;
+                Some((command, reply_sender)) = client_receiver.recv() => {
+                    info!("Received client message {}", command);
 
-                    // FIXME we only send non-empty replies to clients here.
-                    // the network peer messages are done inside the handle_message function instead
-                    // this may be improved by separating the network and client listeners
+                    // for now generating the uuid here, should we let the client do it?
+                    let txid = uuid::Uuid::new_v4().to_string();
+                    let message = Command(txid, command);
+                    let result = self.handle_message(message.clone()).await.map_err(|e|e.to_string());
+
+                    // in the case of clients sending a tcp request, we want to write a response directly
+                    // to their connection
                     if let Err(error) = reply_sender.send(result) {
                         error!("failed to send message {:?} response {:?}", message, error);
                     };
+                }
+                Some((message, _)) = network_receiver.recv() => {
+                    info!("Received network message {}", message);
+
+                    // FIXME network messages shouldn't fail
+                    self.handle_message(message.clone()).await.unwrap();
                 }
                 else => {
                     error!("node channels are closed");
@@ -135,8 +146,6 @@ impl Node {
     /// This function is the core of the node's behavior. It process messages coming both from clients
     /// and peers, updates the local state and broadcasts updates.
     async fn handle_message(&mut self, message: Message) -> Result<Option<String>> {
-        info!("Received network message {}", message);
-
         match message {
             // When a client read request is received, just read the local ledger and send a response
             Command(_, Get { key }) => Ok(self.ledger.get(&key)),
@@ -252,25 +261,6 @@ impl Node {
             // forward the command to all replicas and wait for them to respond
             info!("Broadcasting to {:?}", peers_vec);
             self.sender.broadcast(peers_vec, data).await;
-        }
-    }
-}
-
-impl Message {
-    /// Incoming requests can be either messages sent by other nodes or client commands
-    /// (which are server implementation agnostic)
-    /// in which case they are wrapped into Message::Command to treat them uniformly by
-    /// the state machine
-    pub fn deserialize(data: Bytes) -> Result<Self> {
-        // this allows handling both client and peer messages from the same tcp listener
-        // alternatively the network code could be refactored to have different tcp connections
-        // and feeding both types of incoming messages into the same async handler task
-        if let Ok(c) = bincode::deserialize::<ClientCommand>(&data) {
-            // for now generating the uuid here, should we let the client do it?
-            let txid = uuid::Uuid::new_v4().to_string();
-            Ok(Self::Command(txid, c))
-        } else {
-            bincode::deserialize(&data).map_err(|e| anyhow!(e))
         }
     }
 }
