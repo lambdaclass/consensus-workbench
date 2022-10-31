@@ -10,14 +10,15 @@ use lib::{
     command::ClientCommand,
     network::{MessageHandler, SimpleSender, Writer},
     store::Store,
-    NetworkReciver, NetworkSender,
+    NetworkReceiver, NetworkSender,
 };
 use log::info;
+use serde::de::IntoDeserializer;
 use std::{
     collections::HashSet,
     net::SocketAddr,
     sync::{Arc, RwLock},
-    time::Instant,
+    time::{Instant, Duration, self},
 };
 use tokio::sync::oneshot;
 
@@ -29,10 +30,13 @@ pub struct Node {
     pub peers: Vec<SocketAddr>,
     pub sender: SimpleSender,
 
+    pub view_change_delta_ms: Option<u16>,
+    pub timer_start: time::Instant,
+
     // fixme: shared state is wrapped in Arc<RwLock<>>s because this is cloned for every received request
     // in the future, we want to implement a channel-based solution like in some of the other PoCs
     pub current_view: u128,
-    pub timer_start: Arc<RwLock<Instant>>,
+    //pub timer_start: Arc<RwLock<Instant>>,
     pub command_view_lock: CommandView,
 
     // the amount of peers which responded with "Lock"
@@ -83,7 +87,8 @@ impl Node {
         peers: Vec<SocketAddr>,
         db_path: &str,
         address: SocketAddr,
-        timer_start: Arc<RwLock<Instant>>,
+        view_change_delta_ms: Option<u16>
+     //   timer_start: Arc<RwLock<Instant>>,
     ) -> Self {
         Self {
             store: Store::new(db_path).unwrap(),
@@ -94,15 +99,35 @@ impl Node {
             lock_responses: HashSet::new(),
             blame_messages: HashSet::new(),
             socket_address: address,
-            timer_start,
+            view_change_delta_ms,
+            timer_start: Instant::now(),
         }
     }
 
-    /// Runs the node to process network messages incoming in the given receiver
-    pub async fn run(&mut self, mut network_receiver: NetworkReciver<Command>) {
-        while let Some((message, reply_sender)) = network_receiver.recv().await {
-            self.handle_msg(message, reply_sender).await;
+    /// Runs a small check to see if timer expired
+    pub async fn check_timer(&mut self) {
+        if self.view_change_delta_ms.is_some() {
+            let timer_duration = self.view_change_delta_ms.unwrap();
+
+            let delta = Duration::from_millis(timer_duration.into());
+                if self.timer_start.elapsed() > delta * 8 {
+                    self.timer_start = Instant::now();
+                    info!("{}: timer expired!",self.socket_address );
+                    self.blame_messages.insert(self.socket_address);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+    }
+
+
+    /// Runs the node to process network messages incoming in the given receiver, and starts a timer for view-change if required
+    pub async fn run(&mut self, mut network_receiver: NetworkReceiver<Command>) {
+loop {
+        tokio::select! {
+            Some((message, reply_sender)) = network_receiver.recv() => self.handle_msg(message, reply_sender).await,
+            () = self.check_timer() => (),
         }
+    }
     }
 
     /// Process each messages coming from clients and foward events to the replicas

@@ -30,7 +30,7 @@ struct Cli {
     /// The network address of the node where to send txs.
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
     address: IpAddr,
-    /// if running as a replica, this is the address of the primary
+    /// If running as a replica, this is the address of the primary
     #[clap(
         long,
         value_parser,
@@ -40,8 +40,9 @@ struct Cli {
     )]
     peers: Vec<SocketAddr>,
 
+    /// If view-change mechanism is enabled, you can set the delta time (in ms)
     #[clap(short, long, value_parser, value_name = "UINT")]
-    view_change: bool,
+    view_change_delta_ms: Option<u16>,
 
     /// The key/value store command to execute.
     #[clap(subcommand)]
@@ -56,7 +57,7 @@ async fn main() {
 
     simple_logger::SimpleLogger::new().env().init().unwrap();
 
-    let timer_start = Arc::new(RwLock::new(Instant::now()));
+    let timer_start = Instant::now();
     let address = SocketAddr::new(cli.address, cli.port);
 
     // because the Client application does not work with this (sends a ClientCommand not wrapped in Command())
@@ -68,30 +69,9 @@ async fn main() {
     let node = Node::new(
         cli.peers,
         &format!(".db_{}", address.port()),
-        address,
-        timer_start.clone(),
+        address
     );
 
-    // todo/fixme: this needs to change and use channels
-    if cli.view_change {
-        tokio::spawn(async move {
-            let delta = Duration::from_millis(1000);
-
-            loop {
-                if timer_start.read().unwrap().elapsed() > delta * 8 {
-                    *timer_start.write().unwrap() = Instant::now();
-                    info!("{}: timer expired!", address);
-                    let blame_message = Command::Network(NetworkCommand::Blame {
-                        socket_addr: address,
-                        view: 0,
-                        timer_expired: true,
-                    });
-                    blame_message.send_to(address).await.unwrap();
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        });
-    }
     info!(
         "Node: Running on {}. Primary = {}...",
         node.socket_address,
@@ -102,7 +82,7 @@ async fn main() {
     network_handle.await.unwrap();
 }
 
-async fn spawn_node_tasks(address: SocketAddr, mut node: Node) -> (JoinHandle<()>, JoinHandle<()>) {
+async fn spawn_node_tasks(address: SocketAddr, mut node: Node, view_change_delta: Option<u16>) -> (JoinHandle<()>, JoinHandle<()>) {
     let (network_sender, network_receiver) = mpsc::channel(CHANNEL_CAPACITY);
 
     let network_handle = tokio::spawn(async move {
@@ -114,6 +94,11 @@ async fn spawn_node_tasks(address: SocketAddr, mut node: Node) -> (JoinHandle<()
         receiver.run().await;
     });
 
+    if view_change_delta.is_some() {
+        let task = tokio::spawn(async move {
+            node.run_timer_task(view_change_delta.unwrap());
+        });
+    }
     (network_handle, node_handle)
 }
 async fn send_command(socket_addr: SocketAddr, command: Command) {
