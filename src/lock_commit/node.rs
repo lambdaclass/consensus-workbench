@@ -101,7 +101,7 @@ impl Node {
         }
     }
 
-    /// Runs a small check to see if timer expired
+    /// Runs a check to see if timer expired and acts accordingly
     pub async fn check_timer(&mut self) {
         if self.view_change_delta_ms.is_some() {
             let timer_duration = self.view_change_delta_ms.unwrap();
@@ -111,6 +111,14 @@ impl Node {
                 self.timer_start = Instant::now();
                 info!("{}: timer expired!", self.socket_address);
                 self.blame_messages.insert(self.socket_address);
+
+                // same as if we receive enough blames (TODO: this needs to check that there is no log for this view?)
+                self.broadcast_to_others(NetworkCommand::Blame {
+                    socket_addr: self.socket_address,
+                    view: self.current_view,
+                    timer_expired: false,
+                })
+                .await;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
@@ -208,8 +216,6 @@ impl Node {
 
             // the backup gets a Commit message after we reach quorum, so we can go ahead and commit
             (Backup, Command::Network(NetworkCommand::Commit { command_view })) => {
-                info!("about to try commit as a response to Commit message");
-
                 let result = match self.try_commit(command_view).await {
                     Ok(result) => {
                         info!(
@@ -359,7 +365,6 @@ impl Node {
         self.current_view = command_view.view;
         self.command_view_lock.view += 1;
 
-        // handle command
         self.lock_responses.clear();
         self.clear_cmd_view_lock();
 
