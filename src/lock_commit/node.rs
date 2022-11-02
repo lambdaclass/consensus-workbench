@@ -5,7 +5,7 @@ use crate::command_ext::{Command, CommandView, NetworkCommand};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{future::join, sink::SinkExt as _};
+use futures::{sink::SinkExt as _};
 use lib::{
     command::ClientCommand,
     network::{MessageHandler, SimpleSender, Writer},
@@ -220,7 +220,8 @@ impl Node {
 
             // the backup gets a Commit message after we reach quorum, so we can go ahead and commit
             (Backup, Command::Network(NetworkCommand::Commit { command_view })) => {
-                let result = match self.try_commit(command_view).await {
+                
+                match self.try_commit(command_view).await {
                     Ok(result) => {
                         info!(
                             "{}: Committed command, response was {:?}",
@@ -230,8 +231,7 @@ impl Node {
                         Ok(None)
                     }
                     _ => Err(anyhow!("Error committing command")),
-                };
-                result
+                }
             }
             // View change moves the view/primary after enough blames were emitted
             (
