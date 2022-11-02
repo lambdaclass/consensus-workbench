@@ -5,7 +5,7 @@ use crate::command_ext::{Command, CommandView, NetworkCommand};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::sink::SinkExt as _;
+use futures::{future::join, sink::SinkExt as _};
 use lib::{
     command::ClientCommand,
     network::{MessageHandler, SimpleSender, Writer},
@@ -103,33 +103,37 @@ impl Node {
 
     /// Runs a check to see if timer expired and acts accordingly
     pub async fn check_timer(&mut self) {
-        if self.view_change_delta_ms.is_some() {
-            let timer_duration = self.view_change_delta_ms.unwrap();
+        let timer_duration = self.view_change_delta_ms.unwrap();
 
-            let delta = Duration::from_millis(timer_duration.into());
-            if self.timer_start.elapsed() > delta * 8 {
-                self.timer_start = Instant::now();
-                info!("{}: timer expired!", self.socket_address);
-                self.blame_messages.insert(self.socket_address);
+        let delta = Duration::from_millis(timer_duration.into());
+        if self.timer_start.elapsed() > delta * 8 {
+            self.timer_start = Instant::now();
+            info!("{}: timer expired!", self.socket_address);
+            self.blame_messages.insert(self.socket_address);
 
-                // same as if we receive enough blames (TODO: this needs to check that there is no log for this view?)
-                self.broadcast_to_others(NetworkCommand::Blame {
-                    socket_addr: self.socket_address,
-                    view: self.current_view,
-                    timer_expired: false,
-                })
-                .await;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            // same as if we receive enough blames (TODO: this needs to check that there is no log for this view?)
+            self.broadcast_to_others(NetworkCommand::Blame {
+                socket_addr: self.socket_address,
+                view: self.current_view,
+                timer_expired: false,
+            })
+            .await;
         }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
     /// Runs the node to process network messages incoming in the given receiver, and starts a timer for view-change if required
     pub async fn run(&mut self, mut network_receiver: NetworkReceiver<Command>) {
-        loop {
-            tokio::select! {
-                Some((message, reply_sender)) = network_receiver.recv() => self.handle_msg(message, reply_sender).await,
-                () = self.check_timer() => (),
+        if self.view_change_delta_ms.is_none() {
+            while let Some((message, reply_sender)) = network_receiver.recv().await {
+                self.handle_msg(message, reply_sender).await;
+            }
+        } else {
+            loop {
+                tokio::select! {
+                    Some((message, reply_sender)) = network_receiver.recv() => self.handle_msg(message, reply_sender).await,
+                    _ = self.check_timer() => (),
+                }
             }
         }
     }
