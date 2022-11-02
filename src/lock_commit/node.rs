@@ -3,23 +3,22 @@ use crate::command_ext::{Command, CommandView, NetworkCommand};
 /// Every Set command to a primary node will be broadcasted reliably for the backup nodes to replicate it.
 /// We plan to add backup promotion in case of primary failure.
 use anyhow::{anyhow, Result};
-use async_trait::async_trait;
 use bytes::Bytes;
-use futures::sink::SinkExt as _;
 use lib::{
-    command::{self, ClientCommand},
-    network::{MessageHandler, SimpleSender, Writer},
+    command::{ClientCommand, CommandResult},
+    network::SimpleSender,
     store::Store,
 };
-use log::info;
+use log::{error, info};
 use std::{
     collections::HashSet,
     net::SocketAddr,
     sync::{Arc, Mutex, RwLock},
     time::Instant,
 };
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::mpsc::Receiver;
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 
 #[derive(Clone)]
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
@@ -51,33 +50,6 @@ pub enum State {
 
 use State::*;
 
-#[derive(Clone)]
-pub struct NodeReceiverHandler {
-    /// Used to forward incoming TCP messages to the node
-    pub network_sender: Sender<(Command, oneshot::Sender<Result<Option<Vec<u8>>>>)>,
-}
-
-#[async_trait]
-impl MessageHandler for NodeReceiverHandler {
-    /// When a TCP message is received, interpret it as a node::Message and forward it to the node task.
-    /// Send the node's response back through the TCP connection.
-    async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
-        let request: Command = bincode::deserialize(&bytes)?;
-        log::info!("Received request {:?}", request);
-
-        let (reply_sender, reply_receiver) = oneshot::channel();
-        self.network_sender.send((request, reply_sender)).await?;
-        let reply = reply_receiver.await?.map_err(|e| e.to_string());
-
-        let reply = bincode::serialize(&reply)?;
-        log::info!("Sending response {:?}", reply);
-
-        let _ = writer.send(reply.into()).await?;
-
-        Ok(())
-    }
-}
-
 impl Node {
     pub fn new(
         peers: Vec<SocketAddr>,
@@ -87,7 +59,7 @@ impl Node {
     ) -> Self {
         Self {
             store: Store::new(db_path).unwrap(),
-            peers: peers,
+            peers,
             sender: SimpleSender::new(),
             current_view: Arc::new(RwLock::new(0)),
             command_view_lock: Arc::new(RwLock::new(CommandView::new())),
@@ -101,22 +73,36 @@ impl Node {
     /// Runs the node to process network messages incoming in the given receiver
     pub async fn run(
         &mut self,
-        mut network_receiver: Receiver<(Command, oneshot::Sender<Result<Option<Vec<u8>>>>)>,
-    ) -> () {
-        while let Some((message, reply_sender)) = network_receiver.recv().await {
-            self.handle_msg(message, reply_sender).await;
+        mut network_receiver: Receiver<(Command, oneshot::Sender<()>)>,
+        mut client_receiver: Receiver<(Command, oneshot::Sender<CommandResult>)>,
+    ) -> JoinHandle<()> {
+        loop {
+            tokio::select! {
+            Some((command, reply_sender)) = client_receiver.recv() => {
+                    info!("Received client message {}", command);
+
+                    let result = self.handle_msg(command.clone()).await.map_err(|e|e.to_string());
+
+                    if let Err(error) = reply_sender.send(result) {
+                        error!("failed to send message {:?} response {:?}", command, error);
+                    };
+                }
+                Some((command, _)) = network_receiver.recv() => {
+                    info!("Received network message {}", command);
+                    self.handle_msg(command.clone()).await.unwrap();
+                }
+                else => {
+                    error!("node channels are closed");
+                }
+            }
         }
     }
 
     /// Process each messages coming from clients and foward events to the replicas
-    pub async fn handle_msg(
-        &mut self,
-        message: Command,
-        reply_sender: oneshot::Sender<Result<Option<Vec<u8>>>>,
-    ) -> () {
+    pub async fn handle_msg(&mut self, message: Command) -> Result<Option<String>> {
         let state = self.get_state();
 
-        let result = match (state, message) {
+        match (state, message) {
             // as a 'hack': to make it simpler, we can just forward the Get command to handle_client_message
             // if you comment this match code block, Get requests will also require quorum but it will still work
             (_, Command::Client(cmd @ ClientCommand::Get { key: _ })) => {
@@ -171,7 +157,7 @@ impl Node {
 
                 let lock_command = Command::Network(NetworkCommand::Lock {
                     socket_addr: self.socket_address,
-                    command_view: command_view,
+                    command_view,
                 });
 
                 self.send_to_primary(lock_command).await;
@@ -239,16 +225,14 @@ impl Node {
                 info!("{} :unhandled command", self.socket_address);
                 Err(anyhow!("Unhandled command"))
             }
-        };
-
-        let _ = reply_sender.send(result);
+        }
     }
 
     async fn handle_lock_message(
         &mut self,
         socket_addr: SocketAddr,
         command_view: CommandView,
-    ) -> Result<Option<Vec<u8>>, anyhow::Error> {
+    ) -> Result<Option<String>> {
         if command_view.view <= *self.current_view.read().unwrap() {
             info!("Received command with an old, previously committed view, discarding");
             Ok(None)
@@ -272,22 +256,29 @@ impl Node {
                     .await
                     .expect("Error committing command as primary");
 
-                self.broadcast_to_others(NetworkCommand::Commit {
-                    command_view: command_view,
-                })
-                .await;
+                self.broadcast_to_others(NetworkCommand::Commit { command_view })
+                    .await;
             }
             Ok(None)
         }
     }
 
-    async fn handle_client_command(
-        &self,
-        command: ClientCommand,
-    ) -> Result<Option<Vec<u8>>, anyhow::Error> {
+    async fn handle_client_command(&self, command: ClientCommand) -> Result<Option<String>> {
         match command {
-            ClientCommand::Set { key, value } => self.store.write(key.into(), value.into()).await,
-            ClientCommand::Get { key } => self.store.read(key.clone().into()).await,
+            ClientCommand::Set { key, value } => {
+                self.store
+                    .write(key.into(), value.clone().into())
+                    .await
+                    .unwrap();
+                Ok(Some(value))
+            }
+            ClientCommand::Get { key } => {
+                if let Ok(Some(val)) = self.store.read(key.clone().into()).await {
+                    let value = String::from_utf8(val).unwrap();
+                    return Ok(Some(value));
+                }
+                Ok(None)
+            }
         }
     }
 
@@ -321,10 +312,10 @@ impl Node {
         let primary_address = *(self.get_primary(*self.current_view.read().unwrap()));
 
         // forward the command to all replicas and wait for them to respond
-        let _ = self.sender.send(primary_address, message).await;
+        self.sender.send(primary_address, message).await;
     }
 
-    async fn try_commit(&mut self, command_view: CommandView) -> Result<Option<Vec<u8>>> {
+    async fn try_commit(&mut self, command_view: CommandView) -> Result<Option<String>> {
         *self.timer_start.write().unwrap() = Instant::now();
 
         // handle command, remove command lock (Primray already commits when quorum is achieved)
@@ -396,7 +387,7 @@ impl Node {
         view: u128,
         socket_addr: SocketAddr,
         timer_expired: bool,
-    ) -> Result<Option<Vec<u8>>> {
+    ) -> Result<Option<String>> {
         if view != *self.current_view.read().unwrap() && !timer_expired {
             return Ok(None);
         }

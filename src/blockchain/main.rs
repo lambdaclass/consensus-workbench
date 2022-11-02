@@ -1,7 +1,7 @@
 /// This module is a binary that listens for TCP connections, runs a node and forwards to it incoming client and peer messages.
 use clap::Parser;
+use lib::network::Receiver;
 use log::info;
-use receiver::Receiver;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::task::JoinHandle;
 
@@ -9,14 +9,15 @@ use crate::node::Node;
 
 mod ledger;
 mod node;
-mod receiver;
 
 #[derive(Parser)]
 #[clap(author, version, about)]
 struct Cli {
     /// The network port of the node where to send txs.
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = 6100)]
-    port: u16,
+    client_port: u16,
+    #[clap(short, long, value_parser, value_name = "UINT", default_value_t = 6200)]
+    network_port: u16,
     /// The network address of the node where to send txs.
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
     address: IpAddr,
@@ -29,13 +30,15 @@ struct Cli {
 async fn main() {
     let cli = Cli::parse();
 
-    info!("Node socket: {}:{}", cli.address, cli.port);
+    info!(
+        "Node socket for client request {}:{}, network request: {}:{}",
+        cli.address, cli.client_port, cli.address, cli.network_port
+    );
 
     simple_logger::SimpleLogger::new().env().init().unwrap();
 
-    let network_address = SocketAddr::new(cli.address, cli.port);
-    // FIXME lazily assuming +1000 for client port. move to CLI if anyone cares about it
-    let client_address = SocketAddr::new(cli.address, cli.port + 1000);
+    let network_address = SocketAddr::new(cli.address, cli.client_port);
+    let client_address = SocketAddr::new(cli.address, cli.network_port);
 
     let (_, network_handle, _) = spawn_node_tasks(network_address, client_address, cli.seed).await;
 
@@ -270,7 +273,7 @@ mod tests {
             .send_to(address)
             .await
             .unwrap();
-            if reply.is_some() && reply.unwrap() == value.to_string() {
+            if reply.is_some() && reply.unwrap() == value {
                 Ok(())
             } else {
                 Err(())
