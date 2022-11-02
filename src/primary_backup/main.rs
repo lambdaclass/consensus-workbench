@@ -112,7 +112,7 @@ async fn spawn_node_tasks(
 fn db_name(cli: &Cli, default: &str) -> String {
     let default = &default.to_string();
     let name = cli.name.as_ref().unwrap_or(default);
-    format!(".db_{}", name)
+    format!(".db_{name}")
 }
 
 #[cfg(test)]
@@ -136,7 +136,7 @@ mod tests {
     }
 
     fn db_path(suffix: &str) -> String {
-        format!(".db_test/{}", suffix)
+        format!(".db_test/{suffix}")
     }
 
     #[tokio::test(flavor = "multi_thread")]

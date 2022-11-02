@@ -21,7 +21,7 @@ Each sub-directory contains an implementation of a key/value store with specific
 1. [Single node server](/src/single_node)
 1. [Primary/backup server](/src/primary_backup)
 1. Two-phase commit (TODO)
-2. Lock-commit (TODO)
+2. [Lock-commit](/src/lock_commit)
 3. Raft (TODO)
 3. [Proof of work blockchain](/src/blockchain)
 4. Streamlet (TODO)

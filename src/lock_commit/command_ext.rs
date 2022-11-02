@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use core::fmt;
+use std::fmt;
 use std::net::SocketAddr;
 
 use lib::{command::ClientCommand, network::ReliableSender};

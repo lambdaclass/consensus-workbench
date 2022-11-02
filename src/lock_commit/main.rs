@@ -159,7 +159,7 @@ mod tests {
     }
 
     fn db_path(suffix: &str) -> String {
-        format!(".db_test/{}", suffix)
+        format!(".db_test/{suffix}")
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -271,6 +271,8 @@ mod tests {
         .unwrap();
         assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
+
+        sleep(Duration::from_millis(100)).await;
 
         // get value on replica to make sure it was replicated
         let reply = Command::Client(ClientCommand::Get {

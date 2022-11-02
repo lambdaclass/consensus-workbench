@@ -117,7 +117,7 @@ mod tests {
         assert_eventually_equals(client_address, "k1", "v1").await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn multiple_nodes() {
         let network_address1: SocketAddr = "127.0.0.1:6279".parse().unwrap();
         let network_address2: SocketAddr = "127.0.0.1:6289".parse().unwrap();
@@ -156,7 +156,7 @@ mod tests {
         assert_eventually_equals(client_address3, "k1", "v2").await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn new_node_catch_up() {
         // start two nodes
         let network_address1: SocketAddr = "127.0.0.1:6179".parse().unwrap();
@@ -197,7 +197,7 @@ mod tests {
         assert_eventually_equals(client_address3, "k1", "v2").await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn node_crash_recover() {
         let network_address1: SocketAddr = "127.0.0.1:6579".parse().unwrap();
         let network_address2: SocketAddr = "127.0.0.1:6589".parse().unwrap();
