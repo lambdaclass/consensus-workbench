@@ -13,7 +13,7 @@ use lib::{
     NetworkReceiver, NetworkSender,
 };
 use log::info;
-use serde::Serialize;
+
 use std::{
     collections::HashSet,
     net::SocketAddr,

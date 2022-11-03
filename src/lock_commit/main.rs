@@ -107,9 +107,9 @@ mod tests {
 
     use super::*;
     use lib::command::ClientCommand;
-    use rocksdb::backup::BackupEngineInfo;
-    use std::{fs, sync::{Arc, Mutex}, borrow::BorrowMut};
-    use tokio::{time::{sleep, Duration}, sync::RwLock};
+
+    use std::fs;
+    use tokio::time::{sleep, Duration};
 
     #[ctor::ctor]
     fn init() {
@@ -254,7 +254,7 @@ mod tests {
 
         spawn_node_tasks_test(address_primary, primary).await;
         spawn_node_tasks_test(address_replica, backup).await;
-    
+
         sleep(Duration::from_millis(1500)).await;
 
         unsafe {
@@ -266,18 +266,21 @@ mod tests {
     }
 
     // in order for the `move` not to change Node's memory location, this function takes a Box<Node> instead of a <Node>
-    async fn spawn_node_tasks_test(address: SocketAddr, mut node: Box<Node>) -> (JoinHandle<()>, JoinHandle<()>) {
+    async fn spawn_node_tasks_test(
+        address: SocketAddr,
+        mut node: Box<Node>,
+    ) -> (JoinHandle<()>, JoinHandle<()>) {
         let (network_sender, network_receiver) = mpsc::channel(CHANNEL_CAPACITY);
-    
+
         let network_handle = tokio::spawn(async move {
             (*node).run(network_receiver).await;
         });
-    
+
         let node_handle = tokio::spawn(async move {
             let receiver = NetworkReceiver::new(address, NodeReceiverHandler { network_sender });
             receiver.run().await;
         });
-    
+
         (network_handle, node_handle)
     }
 }
