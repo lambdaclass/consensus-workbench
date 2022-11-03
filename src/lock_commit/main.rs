@@ -124,7 +124,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_only_primary_server() {
-        let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
+        let address: SocketAddr = "127.0.0.1:9900".parse().unwrap();
         fs::remove_dir_all(".db_test_primary1").unwrap_or_default();
         let node = node::Node::new(vec![address], &db_path("primary1"), address, None);
 
@@ -165,8 +165,8 @@ mod tests {
         fs::remove_dir_all(".db_test_primary2").unwrap_or_default();
         fs::remove_dir_all(".db_test_backup2").unwrap_or_default();
 
-        let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
-        let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
+        let address_primary: SocketAddr = "127.0.0.1:7665".parse().unwrap();
+        let address_replica: SocketAddr = "127.0.0.1:7667".parse().unwrap();
 
         let backup = node::Node::new(
             vec![address_primary, address_replica],
@@ -232,8 +232,8 @@ mod tests {
 
     #[tokio::test()]
     async fn test_view_change() {
-        let address_primary: SocketAddr = "127.0.0.1:6280".parse().unwrap();
-        let address_replica: SocketAddr = "127.0.0.1:6281".parse().unwrap();
+        let address_primary: SocketAddr = "127.0.0.1:9999".parse().unwrap();
+        let address_replica: SocketAddr = "127.0.0.1:9998".parse().unwrap();
 
         let backup = Box::new(node::Node::new(
             vec![address_primary, address_replica],
