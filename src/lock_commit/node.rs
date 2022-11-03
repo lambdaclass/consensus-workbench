@@ -119,6 +119,7 @@ impl Node {
                 timer_expired: false,
             })
             .await;
+
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -220,11 +221,7 @@ impl Node {
 
             // the backup gets a Commit message after we reach quorum, so we can go ahead and commit
             (Backup, Command::Network(NetworkCommand::Commit { command_view })) => {
-<<<<<<< HEAD
                 match self.try_commit(command_view).await {
-=======
-                let result = match self.try_commit(command_view).await {
->>>>>>> 3901c4d (handle timer)
                     Ok(result) => {
                         info!(
                             "{}: Committed command, response was {:?}",
