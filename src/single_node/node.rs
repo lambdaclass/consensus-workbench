@@ -8,7 +8,7 @@ use lib::{
     command::ClientCommand,
     network::{MessageHandler, Writer},
     store::Store,
-    NetworkReciver, NetworkSender,
+    NetworkReceiver, NetworkSender,
 };
 use tokio::sync::oneshot;
 
@@ -26,7 +26,7 @@ impl Node {
     }
 
     /// Runs the node to process network messages incoming in the given receiver
-    pub async fn run(&mut self, mut network_receiver: NetworkReciver<ClientCommand>) {
+    pub async fn run(&mut self, mut network_receiver: NetworkReceiver<ClientCommand>) {
         while let Some((message, reply_sender)) = network_receiver.recv().await {
             self.handle_msg(message, reply_sender).await;
         }

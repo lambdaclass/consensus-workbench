@@ -3,14 +3,10 @@ use lib::{command::ClientCommand, network::Receiver as NetworkReceiver};
 use log::{info, warn};
 use tokio::sync::mpsc;
 
-use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::{Arc, RwLock},
-    time::{Duration, Instant},
-};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use crate::{
-    command_ext::{Command, NetworkCommand},
+    command_ext::Command,
     node::{Node, NodeReceiverHandler, State},
 };
 
@@ -30,7 +26,7 @@ struct Cli {
     /// The network address of the node where to send txs.
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
     address: IpAddr,
-    /// if running as a replica, this is the address of the primary
+    /// If running as a replica, this is the address of the primary
     #[clap(
         long,
         value_parser,
@@ -40,8 +36,9 @@ struct Cli {
     )]
     peers: Vec<SocketAddr>,
 
+    /// If view-change mechanism is enabled, you can set the delta time (in ms)
     #[clap(short, long, value_parser, value_name = "UINT")]
-    view_change: bool,
+    view_change_delta_ms: Option<u16>,
 
     /// The key/value store command to execute.
     #[clap(subcommand)]
@@ -56,7 +53,6 @@ async fn main() {
 
     simple_logger::SimpleLogger::new().env().init().unwrap();
 
-    let timer_start = Arc::new(RwLock::new(Instant::now()));
     let address = SocketAddr::new(cli.address, cli.port);
 
     // because the Client application does not work with this (sends a ClientCommand not wrapped in Command())
@@ -69,29 +65,9 @@ async fn main() {
         cli.peers,
         &format!(".db_{}", address.port()),
         address,
-        timer_start.clone(),
+        cli.view_change_delta_ms,
     );
 
-    // todo/fixme: this needs to change and use channels
-    if cli.view_change {
-        tokio::spawn(async move {
-            let delta = Duration::from_millis(1000);
-
-            loop {
-                if timer_start.read().unwrap().elapsed() > delta * 8 {
-                    *timer_start.write().unwrap() = Instant::now();
-                    info!("{}: timer expired!", address);
-                    let blame_message = Command::Network(NetworkCommand::Blame {
-                        socket_addr: address,
-                        view: 0,
-                        timer_expired: true,
-                    });
-                    blame_message.send_to(address).await.unwrap();
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        });
-    }
     info!(
         "Node: Running on {}. Primary = {}...",
         node.socket_address,
@@ -131,6 +107,7 @@ mod tests {
 
     use super::*;
     use lib::command::ClientCommand;
+
     use std::fs;
     use tokio::time::{sleep, Duration};
 
@@ -147,15 +124,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_only_primary_server() {
-        let address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
-        let timer_start = Arc::new(RwLock::new(Instant::now()));
+        let address: SocketAddr = "127.0.0.1:9900".parse().unwrap();
         fs::remove_dir_all(".db_test_primary1").unwrap_or_default();
-        let node = node::Node::new(
-            vec![address],
-            &db_path("primary1"),
-            address,
-            timer_start.clone(),
-        );
+        let node = node::Node::new(vec![address], &db_path("primary1"), address, None);
 
         spawn_node_tasks(address, node).await;
 
@@ -191,26 +162,24 @@ mod tests {
 
     #[tokio::test()]
     async fn test_replicated_server() {
-        let timer_start = Arc::new(RwLock::new(Instant::now()));
-        let timer_start_secondary = Arc::new(RwLock::new(Instant::now()));
         fs::remove_dir_all(".db_test_primary2").unwrap_or_default();
         fs::remove_dir_all(".db_test_backup2").unwrap_or_default();
 
-        let address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
-        let address_replica: SocketAddr = "127.0.0.1:6381".parse().unwrap();
+        let address_primary: SocketAddr = "127.0.0.1:7665".parse().unwrap();
+        let address_replica: SocketAddr = "127.0.0.1:7667".parse().unwrap();
 
         let backup = node::Node::new(
             vec![address_primary, address_replica],
             &db_path("backup2"),
             address_replica,
-            timer_start,
+            None,
         );
 
         let primary = node::Node::new(
             vec![address_primary, address_replica],
             &db_path("primary2"),
             address_primary,
-            timer_start_secondary,
+            None,
         );
 
         spawn_node_tasks(address_primary, primary).await;
@@ -259,5 +228,59 @@ mod tests {
         .unwrap();
         assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
+    }
+
+    #[tokio::test()]
+    async fn test_view_change() {
+        let address_primary: SocketAddr = "127.0.0.1:9999".parse().unwrap();
+        let address_replica: SocketAddr = "127.0.0.1:9998".parse().unwrap();
+
+        let backup = Box::new(node::Node::new(
+            vec![address_primary, address_replica],
+            &db_path("backup_vc"),
+            address_replica,
+            Some(100),
+        ));
+
+        let primary = Box::new(node::Node::new(
+            vec![address_primary, address_replica],
+            &db_path("primary_vc"),
+            address_primary,
+            Some(100),
+        ));
+
+        let backup_raw = &*backup as *const Node;
+        let primary_raw = &*primary as *const Node;
+
+        spawn_node_tasks_test(address_primary, primary).await;
+        spawn_node_tasks_test(address_replica, backup).await;
+
+        sleep(Duration::from_millis(1500)).await;
+
+        unsafe {
+            // because ownership moves to spawn_node_tasks_test(), we have to deref the raw pointers
+            // which will have the same memory location because they were boxed
+            assert!((*backup_raw).current_view > 0);
+            assert!((*primary_raw).current_view > 0);
+        }
+    }
+
+    // in order for the `move` not to change Node's memory location, this function takes a Box<Node> instead of a <Node>
+    async fn spawn_node_tasks_test(
+        address: SocketAddr,
+        mut node: Box<Node>,
+    ) -> (JoinHandle<()>, JoinHandle<()>) {
+        let (network_sender, network_receiver) = mpsc::channel(CHANNEL_CAPACITY);
+
+        let network_handle = tokio::spawn(async move {
+            (*node).run(network_receiver).await;
+        });
+
+        let node_handle = tokio::spawn(async move {
+            let receiver = NetworkReceiver::new(address, NodeReceiverHandler { network_sender });
+            receiver.run().await;
+        });
+
+        (network_handle, node_handle)
     }
 }

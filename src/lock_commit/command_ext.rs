@@ -54,7 +54,7 @@ impl Command {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct CommandView {
     pub command: ClientCommand, // lock_value
     pub view: u128,             // lock_view

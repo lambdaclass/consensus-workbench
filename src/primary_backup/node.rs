@@ -9,7 +9,7 @@ use lib::command::ClientCommand;
 use lib::{
     network::{MessageHandler, ReliableSender, Writer},
     store::Store,
-    NetworkReciver, NetworkSender,
+    NetworkReceiver, NetworkSender,
 };
 use log::info;
 use serde::{Deserialize, Serialize};
@@ -126,7 +126,7 @@ impl Node {
     }
 
     /// Runs the node to process network messages incoming in the given receiver
-    pub async fn run(&mut self, mut network_receiver: NetworkReciver<Message>) {
+    pub async fn run(&mut self, mut network_receiver: NetworkReceiver<Message>) {
         while let Some((message, reply_sender)) = network_receiver.recv().await {
             self.handle_msg(message, reply_sender).await;
         }
