@@ -83,7 +83,7 @@ impl Node {
         peers: Vec<SocketAddr>,
         db_path: &str,
         address: SocketAddr,
-        view_change_delta_ms: Option<u16>, 
+        view_change_delta_ms: Option<u16>,
     ) -> Self {
         Self {
             store: Store::new(db_path).unwrap(),
