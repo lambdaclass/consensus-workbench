@@ -94,8 +94,15 @@ impl Node {
         }
     }
 
-    pub async fn proccess_client_msg(&mut self, command: ClientCommand, reply_sender: Sender<Result<Option<String>, String>>) {
-        let result = self.handle_client_msg(command.clone()).await.map_err(|e|e.to_string());
+    pub async fn proccess_client_msg(
+        &mut self,
+        command: ClientCommand,
+        reply_sender: Sender<Result<Option<String>, String>>,
+    ) {
+        let result = self
+            .handle_client_msg(command.clone())
+            .await
+            .map_err(|e| e.to_string());
 
         if let Err(error) = reply_sender.send(result) {
             error!("failed to send message {:?} response {:?}", command, error);
@@ -105,10 +112,8 @@ impl Node {
     pub async fn handle_client_msg(&mut self, message: ClientCommand) -> Result<Option<String>> {
         let state = self.get_state();
 
-         match (state, message) {
-            (_, cmd @ ClientCommand::Get { key: _ }) => {
-                self.handle_client_command(cmd).await
-            }
+        match (state, message) {
+            (_, cmd @ ClientCommand::Get { key: _ }) => self.handle_client_command(cmd).await,
             (Primary, client_comand) => {
                 // we advance the view according to the primary and propose it
                 let command_view = CommandView {
@@ -136,13 +141,13 @@ impl Node {
             }
             (Backup, client_command) => {
                 info!("Received client command, forwarding to primary");
-                self.send_to_primary(NetworkCommand::Forward { command: client_command}).await;
+                self.send_to_primary(NetworkCommand::Forward {
+                    command: client_command,
+                })
+                .await;
                 Ok(None)
             }
-    
         }
-
-
     }
     /// Process each messages coming from clients and foward events to the replicas
     pub async fn handle_network_msg(&mut self, message: NetworkCommand) -> Result<Option<String>> {
@@ -221,17 +226,17 @@ impl Node {
             // this differentiation is so that we can make the protocol partially synchronous instead of synchronous
             (
                 _,
-              NetworkCommand::Blame {
+                NetworkCommand::Blame {
                     socket_addr,
                     view,
                     timer_expired,
                 },
             ) => self.handle_blame(view, socket_addr, timer_expired).await,
-            (_, NetworkCommand::Forward { command}) => {
-                self.handle_client_msg(command);
+            (_, NetworkCommand::Forward { command }) => {
+                self.handle_client_msg(command).await.unwrap();
                 Ok(None)
             }
-             _ => {
+            _ => {
                 info!("{} :unhandled command", self.socket_address);
                 Err(anyhow!("Unhandled command"))
             }
@@ -276,9 +281,7 @@ impl Node {
     async fn handle_client_command(&self, command: ClientCommand) -> Result<Option<String>> {
         match command {
             ClientCommand::Set { key, value } => {
-                self.store
-                    .write(key.into(), value.clone().into())
-                    .await?;
+                self.store.write(key.into(), value.clone().into()).await?;
                 Ok(Some(value))
             }
             ClientCommand::Get { key } => {
@@ -292,18 +295,14 @@ impl Node {
     }
 
     async fn broadcast(&mut self, network_command: NetworkCommand) {
-        let message: Bytes = bincode::serialize(&network_command)
-            .unwrap()
-            .into();
+        let message: Bytes = bincode::serialize(&network_command).unwrap().into();
 
         // forward the command to all replicas and wait for them to respond
         self.sender.broadcast(self.peers.clone(), message).await;
     }
 
     async fn broadcast_to_others(&mut self, network_command: NetworkCommand) {
-        let message: Bytes = bincode::serialize(&network_command)
-            .unwrap()
-            .into();
+        let message: Bytes = bincode::serialize(&network_command).unwrap().into();
 
         let other_peers: Vec<SocketAddr> = self
             .peers

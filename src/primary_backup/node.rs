@@ -160,9 +160,7 @@ impl Node {
                 ))
                 .await;
 
-                self.store
-                    .write(key.into(), value.clone().into())
-                    .await?;
+                self.store.write(key.into(), value.clone().into()).await?;
 
                 if let Some(data) = serialize(&value) {
                     self.sender.send(reply_to, data).await;

@@ -33,7 +33,7 @@ pub enum NetworkCommand {
     },
     Forward {
         command: ClientCommand,
-    }
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -58,7 +58,6 @@ impl fmt::Display for NetworkCommand {
         write!(f, "{:?}", self)
     }
 }
-
 
 impl NetworkCommand {
     /// Send this command over to a server at the given address and return the response.
