@@ -32,10 +32,7 @@ pub struct Node {
     pub view_change_delta_ms: Option<u16>,
     pub timer_start: time::Instant,
 
-    // fixme: shared state is wrapped in Arc<RwLock<>>s because this is cloned for every received request
-    // in the future, we want to implement a channel-based solution like in some of the other PoCs
     pub current_view: u128,
-    //pub timer_start: Arc<RwLock<Instant>>,
     pub command_view_lock: CommandView,
 
     // the amount of peers which responded with "Lock"
@@ -86,7 +83,7 @@ impl Node {
         peers: Vec<SocketAddr>,
         db_path: &str,
         address: SocketAddr,
-        view_change_delta_ms: Option<u16>, //   timer_start: Arc<RwLock<Instant>>,
+        view_change_delta_ms: Option<u16>, 
     ) -> Self {
         Self {
             store: Store::new(db_path).unwrap(),
