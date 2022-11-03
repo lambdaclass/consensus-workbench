@@ -107,8 +107,9 @@ mod tests {
 
     use super::*;
     use lib::command::ClientCommand;
-    use std::fs;
-    use tokio::time::{sleep, Duration};
+    use rocksdb::backup::BackupEngineInfo;
+    use std::{fs, sync::{Arc, Mutex}, borrow::BorrowMut};
+    use tokio::{time::{sleep, Duration}, sync::RwLock};
 
     #[ctor::ctor]
     fn init() {
@@ -227,5 +228,56 @@ mod tests {
         .unwrap();
         assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
+    }
+
+    #[tokio::test()]
+    async fn test_view_change() {
+        let address_primary: SocketAddr = "127.0.0.1:6280".parse().unwrap();
+        let address_replica: SocketAddr = "127.0.0.1:6281".parse().unwrap();
+
+        let backup = Box::new(node::Node::new(
+            vec![address_primary, address_replica],
+            &db_path("backup_vc"),
+            address_replica,
+            Some(100),
+        ));
+
+        let primary = Box::new(node::Node::new(
+            vec![address_primary, address_replica],
+            &db_path("primary_vc"),
+            address_primary,
+            Some(100),
+        ));
+
+        let backup_raw = &*backup as *const Node;
+        let primary_raw = &*primary as *const Node;
+
+        spawn_node_tasks_test(address_primary, primary).await;
+        spawn_node_tasks_test(address_replica, backup).await;
+    
+        sleep(Duration::from_millis(1500)).await;
+
+        unsafe {
+            // because ownership moves to spawn_node_tasks_test(), we have to deref the raw pointers
+            // which will have the same memory location because they were boxed
+            assert!((*backup_raw).current_view > 0);
+            assert!((*primary_raw).current_view > 0);
+        }
+    }
+
+    // in order for the `move` not to change Node's memory location, this function takes a Box<Node> instead of a <Node>
+    async fn spawn_node_tasks_test(address: SocketAddr, mut node: Box<Node>) -> (JoinHandle<()>, JoinHandle<()>) {
+        let (network_sender, network_receiver) = mpsc::channel(CHANNEL_CAPACITY);
+    
+        let network_handle = tokio::spawn(async move {
+            (*node).run(network_receiver).await;
+        });
+    
+        let node_handle = tokio::spawn(async move {
+            let receiver = NetworkReceiver::new(address, NodeReceiverHandler { network_sender });
+            receiver.run().await;
+        });
+    
+        (network_handle, node_handle)
     }
 }

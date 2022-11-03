@@ -13,6 +13,7 @@ use lib::{
     NetworkReceiver, NetworkSender,
 };
 use log::info;
+use serde::Serialize;
 use std::{
     collections::HashSet,
     net::SocketAddr,
@@ -152,7 +153,6 @@ impl Node {
             (_, Command::Client(cmd @ ClientCommand::Get { key: _ })) => {
                 self.handle_client_command(cmd).await
             }
-
             // if we receive a client command that is not a get and we are primary, prepare to propose
             (Primary, Command::Client(client_comand)) => {
                 // we advance the view according to the primary and propose it
