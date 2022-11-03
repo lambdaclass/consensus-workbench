@@ -1,5 +1,7 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use futures::stream::StreamExt as _;
+use anyhow::Result;
+use bytes::Bytes;
+use futures::stream::{SplitSink, StreamExt as _};
 use futures::SinkExt;
 use log::{debug, warn};
 use serde::de::DeserializeOwned;
@@ -14,6 +16,9 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 pub const CHANNEL_CAPACITY: usize = 1_000;
 
+/// Convenient alias for the writer end of the TCP channel.
+pub type Writer = SplitSink<Framed<TcpStream, LengthDelimitedCodec>, Bytes>;
+
 #[derive(Error, Debug)]
 pub enum NetworkError {
     #[error("Failed to accept connection: {0}")]
@@ -23,7 +28,7 @@ pub enum NetworkError {
     FailedToReceiveMessage(SocketAddr, std::io::Error),
 }
 
-// FIXME consider renaming to TcpSender, TcpReceiver, ChannelSender, ChannelReceiver, etc. to reduce ambiguity
+// TODO consider renaming to TcpSender, TcpReceiver, ChannelSender, ChannelReceiver, etc. to reduce ambiguity
 /// A TCP Receiver listens for peer connections and writes messages from all connections to a multi-producer
 /// single-consumer (mpsc) tokio channel.
 pub struct Receiver<Request, Response> {
@@ -33,9 +38,8 @@ pub struct Receiver<Request, Response> {
     /// The sending end of the channel where incoming tpc messages will be forwarded to
     sender: mpsc::Sender<(Request, oneshot::Sender<Response>)>,
 }
-
 impl<
-        Request: DeserializeOwned + Send + Debug + 'static,
+        Request: DeserializeOwned + Send + Debug + Sync + 'static,
         Response: Serialize + Send + Debug + 'static,
     > Receiver<Request, Response>
 {
@@ -81,14 +85,11 @@ impl<
             while let Some(frame) = reader.next().await {
                 match frame.map_err(|e| NetworkError::FailedToReceiveMessage(peer, e)) {
                     Ok(message) => {
-                        // TODO add comments
-                        // FIXME unwraps
-                        let request = bincode::deserialize(&message.freeze()).unwrap();
-                        let (reply_sender, reply_receiver) = oneshot::channel();
-                        sender.send((request, reply_sender)).await.unwrap();
-                        let reply = reply_receiver.await.unwrap();
-                        let reply = bincode::serialize(&reply).unwrap();
-                        writer.send(reply.into()).await.unwrap();
+                        if let Err(e) =
+                            Self::dispatch(&mut writer, sender.clone(), message.freeze()).await
+                        {
+                            warn!("{}", e);
+                        }
                     }
                     Err(e) => {
                         warn!("{}", e);
@@ -98,6 +99,23 @@ impl<
             }
             debug!("Connection closed by peer {}", peer);
         });
+    }
+
+    /// Parse the incoming messages, forward then through the sender channel and wait for a response.
+    async fn dispatch(
+        writer: &mut Writer,
+        sender: mpsc::Sender<(Request, oneshot::Sender<Response>)>,
+        message: Bytes,
+    ) -> Result<()> {
+        let request = bincode::deserialize(&message)?;
+        let (reply_sender, reply_receiver) = oneshot::channel();
+        sender.send((request, reply_sender)).await?;
+
+        // TODO: review if this is safe in cases where the receiver doesn't send a reply
+        let reply = reply_receiver.await?;
+        let reply = bincode::serialize(&reply)?;
+        writer.send(reply.into()).await?;
+        Ok(())
     }
 }
 
