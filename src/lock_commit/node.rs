@@ -73,7 +73,7 @@ impl Node {
     /// Runs the node to process network messages incoming in the given receiver
     pub async fn run(
         &mut self,
-        mut network_receiver: Receiver<(NetworkCommand, oneshot::Sender<()>)>,
+        mut network_receiver: Receiver<(NetworkCommand, oneshot::Sender<String>)>,
         mut client_receiver: Receiver<(ClientCommand, oneshot::Sender<CommandResult>)>,
     ) -> JoinHandle<()> {
         loop {
@@ -82,9 +82,10 @@ impl Node {
                     info!("Received client message {}", command);
                     self.proccess_client_msg(command, reply_sender).await;
                 }
-                Some((command, _)) = network_receiver.recv() => {
+                Some((command, reply_sender)) = network_receiver.recv() => {
                     info!("Received network message {}", command);
                     self.handle_network_msg(command.clone()).await.unwrap();
+                    reply_sender.send("ACK".to_string()).unwrap();
                 }
                 else => {
                     error!("node channels are closed");
