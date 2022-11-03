@@ -12,7 +12,6 @@ use anyhow::{anyhow, Result};
 pub enum Command {
     Client(ClientCommand),
     Network(NetworkCommand),
-    Test,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
