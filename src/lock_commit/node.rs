@@ -136,7 +136,7 @@ impl Node {
             }
             (Backup, client_command) => {
                 info!("Received client command, forwarding to primary");
-                self.send_to_primary(NetworkCommand::Foward { command: client_command}).await;
+                self.send_to_primary(NetworkCommand::Forward { command: client_command}).await;
                 Ok(None)
             }
     
@@ -227,7 +227,7 @@ impl Node {
                     timer_expired,
                 },
             ) => self.handle_blame(view, socket_addr, timer_expired).await,
-            (_, NetworkCommand::Foward { command}) => {
+            (_, NetworkCommand::Forward { command}) => {
                 self.handle_client_msg(command);
                 Ok(None)
             }

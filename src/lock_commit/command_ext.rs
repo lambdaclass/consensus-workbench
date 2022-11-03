@@ -31,7 +31,7 @@ pub enum NetworkCommand {
         new_view: u128,
         highest_lock: CommandView,
     },
-    Foward {
+    Forward {
         command: ClientCommand,
     }
 }
