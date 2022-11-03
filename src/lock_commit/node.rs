@@ -84,8 +84,8 @@ impl Node {
                 }
                 Some((command, reply_sender)) = network_receiver.recv() => {
                     info!("Received network message {}", command);
-                    self.handle_network_msg(command.clone()).await.unwrap();
                     reply_sender.send("ACK".to_string()).unwrap();
+                    self.handle_network_msg(command.clone()).await.unwrap();
                 }
                 else => {
                     error!("node channels are closed");

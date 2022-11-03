@@ -104,7 +104,7 @@ impl Node {
     /// Runs the node to process network messages incoming in the given receiver
     pub async fn run(
         &mut self,
-        mut network_receiver: Receiver<(Message, oneshot::Sender<()>)>,
+        mut network_receiver: Receiver<(Message, oneshot::Sender<String>)>,
         mut client_receiver: Receiver<(ClientCommand, oneshot::Sender<CommandResult>)>,
     ) -> JoinHandle<()> {
         loop {
@@ -120,8 +120,9 @@ impl Node {
                         error!("failed to send message {:?} response {:?}", message, error);
                     };
                 }
-                Some((message, _)) = network_receiver.recv() => {
+                Some((message, reply_sender)) = network_receiver.recv() => {
                     info!("Received network message {}", message);
+                    reply_sender.send("ACK".to_string()).unwrap();
                     self.handle_msg(message.clone()).await.unwrap();
                 }
                 else => {
