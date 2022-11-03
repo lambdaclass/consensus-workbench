@@ -145,8 +145,7 @@ impl Node {
                 .await;
                 self.store
                     .write(key.clone().into(), value.clone().into())
-                    .await
-                    .unwrap();
+                    .await?;
 
                 Ok(Some(value))
             }
@@ -162,8 +161,7 @@ impl Node {
 
                 self.store
                     .write(key.into(), value.clone().into())
-                    .await
-                    .unwrap();
+                    .await?;
 
                 if let Some(data) = serialize(&value) {
                     self.sender.send(reply_to, data).await;
@@ -177,7 +175,7 @@ impl Node {
             }
             (_, Command(Get { key })) => {
                 if let Ok(Some(val)) = self.store.read(key.clone().into()).await {
-                    let value = String::from_utf8(val).unwrap();
+                    let value = String::from_utf8(val)?;
                     return Ok(Some(value));
                 }
 

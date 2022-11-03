@@ -277,13 +277,12 @@ impl Node {
             ClientCommand::Set { key, value } => {
                 self.store
                     .write(key.into(), value.clone().into())
-                    .await
-                    .unwrap();
+                    .await?;
                 Ok(Some(value))
             }
             ClientCommand::Get { key } => {
                 if let Ok(Some(val)) = self.store.read(key.clone().into()).await {
-                    let value = String::from_utf8(val).unwrap();
+                    let value = String::from_utf8(val)?;
                     return Ok(Some(value));
                 }
                 Ok(None)
