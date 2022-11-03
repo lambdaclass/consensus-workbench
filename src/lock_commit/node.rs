@@ -1,4 +1,4 @@
-use crate::command_ext::{Command, CommandView, NetworkCommand};
+use crate::command_ext::{CommandView, NetworkCommand};
 /// This module contains an implementation nodes that can run in primary or backup mode.
 /// Every Set command to a primary node will be broadcasted reliably for the backup nodes to replicate it.
 /// We plan to add backup promotion in case of primary failure.
@@ -17,7 +17,7 @@ use std::{
     time::Instant,
 };
 use tokio::sync::mpsc::Receiver;
-use tokio::sync::oneshot;
+use tokio::sync::oneshot::{self, Sender};
 use tokio::task::JoinHandle;
 
 #[derive(Clone)]
@@ -73,23 +73,18 @@ impl Node {
     /// Runs the node to process network messages incoming in the given receiver
     pub async fn run(
         &mut self,
-        mut network_receiver: Receiver<(Command, oneshot::Sender<()>)>,
-        mut client_receiver: Receiver<(Command, oneshot::Sender<CommandResult>)>,
+        mut network_receiver: Receiver<(NetworkCommand, oneshot::Sender<()>)>,
+        mut client_receiver: Receiver<(ClientCommand, oneshot::Sender<CommandResult>)>,
     ) -> JoinHandle<()> {
         loop {
             tokio::select! {
             Some((command, reply_sender)) = client_receiver.recv() => {
                     info!("Received client message {}", command);
-
-                    let result = self.handle_msg(command.clone()).await.map_err(|e|e.to_string());
-
-                    if let Err(error) = reply_sender.send(result) {
-                        error!("failed to send message {:?} response {:?}", command, error);
-                    };
+                    self.proccess_client_msg(command, reply_sender).await;
                 }
                 Some((command, _)) = network_receiver.recv() => {
                     info!("Received network message {}", command);
-                    self.handle_msg(command.clone()).await.unwrap();
+                    self.handle_network_msg(command.clone()).await.unwrap();
                 }
                 else => {
                     error!("node channels are closed");
@@ -98,19 +93,22 @@ impl Node {
         }
     }
 
-    /// Process each messages coming from clients and foward events to the replicas
-    pub async fn handle_msg(&mut self, message: Command) -> Result<Option<String>> {
+    pub async fn proccess_client_msg(&mut self, command: ClientCommand, reply_sender: Sender<Result<Option<String>, String>>) {
+        let result = self.handle_client_msg(command.clone()).await.map_err(|e|e.to_string());
+
+        if let Err(error) = reply_sender.send(result) {
+            error!("failed to send message {:?} response {:?}", command, error);
+        };
+    }
+
+    pub async fn handle_client_msg(&mut self, message: ClientCommand) -> Result<Option<String>> {
         let state = self.get_state();
 
-        match (state, message) {
-            // as a 'hack': to make it simpler, we can just forward the Get command to handle_client_message
-            // if you comment this match code block, Get requests will also require quorum but it will still work
-            (_, Command::Client(cmd @ ClientCommand::Get { key: _ })) => {
+         match (state, message) {
+            (_, cmd @ ClientCommand::Get { key: _ }) => {
                 self.handle_client_command(cmd).await
             }
-
-            // if we receive a client command that is not a get and we are primary, prepare to propose
-            (Primary, Command::Client(client_comand)) => {
+            (Primary, client_comand) => {
                 // we advance the view according to the primary and propose it
                 let command_view = CommandView {
                     command: client_comand,
@@ -135,19 +133,33 @@ impl Node {
 
                 Ok(None)
             }
+            (Backup, client_command) => {
+                info!("Received client command, forwarding to primary");
+                self.send_to_primary(NetworkCommand::Foward { command: client_command}).await;
+                Ok(None)
+            }
+    
+        }
 
+
+    }
+    /// Process each messages coming from clients and foward events to the replicas
+    pub async fn handle_network_msg(&mut self, message: NetworkCommand) -> Result<Option<String>> {
+        let state = self.get_state();
+
+        match (state, message) {
             // Once we proposed and we receive lock requests as a Primary, we can start counting the responses
             (
                 Primary,
-                Command::Network(NetworkCommand::Lock {
+                NetworkCommand::Lock {
                     socket_addr,
                     command_view,
-                }),
+                },
             ) => self.handle_lock_message(socket_addr, command_view).await,
 
             // a command has been proposed and we can lock it before sending a Lock message
             // for now this happens in the Primary as well, but that functionality could be piggy-backed in the section where we receive the command
-            (_, Command::Network(NetworkCommand::Propose { command_view })) => {
+            (_, NetworkCommand::Propose { command_view }) => {
                 // TODO: You should only lock if view number is expected?
                 self.lock_command_view(&command_view);
                 info!(
@@ -155,27 +167,20 @@ impl Node {
                     self.socket_address
                 );
 
-                let lock_command = Command::Network(NetworkCommand::Lock {
+                let lock_command = NetworkCommand::Lock {
                     socket_addr: self.socket_address,
                     command_view,
-                });
+                };
 
                 self.send_to_primary(lock_command).await;
                 Ok(None)
             }
 
-            (Backup, Command::Client(client_command)) => {
-                info!("Received client command, forwarding to primary");
-
-                self.send_to_primary(Command::Client(client_command)).await;
-                Ok(None)
-            }
-
             // for the primary, the command is committed as we reach quorum, so we can return Ok
-            (Primary, Command::Network(NetworkCommand::Commit { .. })) => Ok(None),
+            (Primary, NetworkCommand::Commit { .. }) => Ok(None),
 
             // the backup gets a Commit message after we reach quorum, so we can go ahead and commit
-            (Backup, Command::Network(NetworkCommand::Commit { command_view })) => {
+            (Backup, NetworkCommand::Commit { command_view }) => {
                 info!("about to try commit as a response to Commit message");
 
                 let result = match self.try_commit(command_view).await {
@@ -194,11 +199,11 @@ impl Node {
             // View change moves the view/primary after enough blames were emitted
             (
                 _,
-                Command::Network(NetworkCommand::ViewChange {
+                NetworkCommand::ViewChange {
                     socket_addr: _,
                     new_view,
                     highest_lock: _,
-                }),
+                },
             ) => {
                 if new_view > self.current_view {
                     info!(
@@ -215,13 +220,17 @@ impl Node {
             // this differentiation is so that we can make the protocol partially synchronous instead of synchronous
             (
                 _,
-                Command::Network(NetworkCommand::Blame {
+              NetworkCommand::Blame {
                     socket_addr,
                     view,
                     timer_expired,
-                }),
+                },
             ) => self.handle_blame(view, socket_addr, timer_expired).await,
-            _ => {
+            (_, NetworkCommand::Foward { command}) => {
+                self.handle_client_msg(command);
+                Ok(None)
+            }
+             _ => {
                 info!("{} :unhandled command", self.socket_address);
                 Err(anyhow!("Unhandled command"))
             }
@@ -283,7 +292,7 @@ impl Node {
     }
 
     async fn broadcast(&mut self, network_command: NetworkCommand) {
-        let message: Bytes = bincode::serialize(&Command::Network(network_command))
+        let message: Bytes = bincode::serialize(&network_command)
             .unwrap()
             .into();
 
@@ -292,7 +301,7 @@ impl Node {
     }
 
     async fn broadcast_to_others(&mut self, network_command: NetworkCommand) {
-        let message: Bytes = bincode::serialize(&Command::Network(network_command))
+        let message: Bytes = bincode::serialize(&network_command)
             .unwrap()
             .into();
 
@@ -307,7 +316,7 @@ impl Node {
         self.sender.broadcast(other_peers, message).await;
     }
 
-    async fn send_to_primary(&mut self, cmd: Command) {
+    async fn send_to_primary(&mut self, cmd: NetworkCommand) {
         let message: Bytes = bincode::serialize(&cmd).unwrap().into();
         let primary_address = *(self.get_primary(self.current_view));
 

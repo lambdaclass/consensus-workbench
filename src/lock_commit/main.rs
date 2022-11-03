@@ -9,7 +9,7 @@ use std::{
 };
 
 use crate::{
-    command_ext::{Command, NetworkCommand},
+    command_ext::NetworkCommand,
     node::{Node, State},
 };
 
@@ -67,7 +67,7 @@ async fn main() {
     // because the Client application does not work with this (sends a ClientCommand not wrapped in Command())
     // if the CLI has a command, this works as a client
     if let Some(cmd) = cli.command {
-        return send_command(client_address, Command::Client(cmd)).await;
+        return send_command(client_address, cmd).await;
     }
 
     let node = Node::new(
@@ -86,11 +86,11 @@ async fn main() {
                 if timer_start.read().unwrap().elapsed() > delta * 8 {
                     *timer_start.write().unwrap() = Instant::now();
                     info!("{}: timer expired!", network_address);
-                    let blame_message = Command::Network(NetworkCommand::Blame {
+                    let blame_message = NetworkCommand::Blame {
                         socket_addr: network_address,
                         view: 0,
                         timer_expired: true,
-                    });
+                    };
                     let _ = blame_message.send_to(network_address).await;
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -133,7 +133,7 @@ async fn spawn_node_tasks(
     (node_handle, network_handle, client_handle)
 }
 
-async fn send_command(socket_addr: SocketAddr, command: Command) {
+async fn send_command(socket_addr: SocketAddr, command: ClientCommand) {
     // using a reliable sender to get a response back
     match command.send_to(socket_addr).await {
         Ok(Some(value)) => info!("{}", value),
@@ -144,8 +144,6 @@ async fn send_command(socket_addr: SocketAddr, command: Command) {
 
 #[cfg(test)]
 mod tests {
-    use crate::command_ext::Command;
-
     use super::*;
     use lib::command::ClientCommand;
     use std::fs;
@@ -182,27 +180,27 @@ mod tests {
 
         sleep(Duration::from_millis(10)).await;
 
-        let reply = Command::Client(ClientCommand::Get {
+        let reply = ClientCommand::Get {
             key: "k1".to_string(),
-        })
+        }
         .send_to(client_address_primary)
         .await
         .unwrap();
         assert!(reply.is_none());
 
-        let _ = Command::Client(ClientCommand::Set {
+        let _ = ClientCommand::Set {
             key: "k1".to_string(),
             value: "v1".to_string(),
-        })
+        }
         .send_to(client_address_primary)
         .await
         .unwrap();
 
         sleep(Duration::from_millis(10)).await;
 
-        let reply = Command::Client(ClientCommand::Get {
+        let reply = ClientCommand::Get {
             key: "k1".to_string(),
-        })
+        }
         .send_to(client_address_primary)
         .await
         .unwrap();
@@ -243,19 +241,19 @@ mod tests {
         sleep(Duration::from_millis(10)).await;
 
         // get null value
-        let reply = Command::Client(ClientCommand::Get {
+        let reply = ClientCommand::Get {
             key: "k1".to_string(),
-        })
+        }
         .send_to(client_address_primary)
         .await
         .unwrap();
         assert!(reply.is_none());
 
         // set a value on primary
-        let _ = Command::Client(ClientCommand::Set {
+        let _ = ClientCommand::Set {
             key: "k1".to_string(),
             value: "v1".to_string(),
-        })
+        }
         .send_to(client_address_primary)
         .await
         .unwrap();
@@ -263,9 +261,9 @@ mod tests {
         sleep(Duration::from_millis(100)).await;
 
         // get value on primary
-        let reply = Command::Client(ClientCommand::Get {
+        let reply = ClientCommand::Get {
             key: "k1".to_string(),
-        })
+        }
         .send_to(client_address_primary)
         .await
         .unwrap();
@@ -275,9 +273,9 @@ mod tests {
         sleep(Duration::from_millis(100)).await;
 
         // get value on replica to make sure it was replicated
-        let reply = Command::Client(ClientCommand::Get {
+        let reply = ClientCommand::Get {
             key: "k1".to_string(),
-        })
+        }
         .send_to(client_address_replica)
         .await
         .unwrap();
