@@ -13,12 +13,10 @@ use log::{error, info};
 use std::{
     collections::HashSet,
     net::SocketAddr,
-    sync::{Arc, RwLock},
-    time::Instant,
+    time::{self, Duration, Instant},
 };
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::oneshot::{self, Sender};
-use tokio::task::JoinHandle;
 
 #[derive(Clone)]
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
@@ -28,10 +26,10 @@ pub struct Node {
     pub peers: Vec<SocketAddr>,
     pub sender: SimpleSender,
 
-    // fixme: shared state is wrapped in Arc<RwLock<>>s because this is cloned for every received request
-    // in the future, we want to implement a channel-based solution like in some of the other PoCs
+    pub view_change_delta_ms: Option<u16>,
+    pub timer_start: time::Instant,
+
     pub current_view: u128,
-    pub timer_start: Arc<RwLock<Instant>>,
     pub command_view_lock: CommandView,
 
     // the amount of peers which responded with "Lock"
@@ -55,7 +53,7 @@ impl Node {
         peers: Vec<SocketAddr>,
         db_path: &str,
         address: SocketAddr,
-        timer_start: Arc<RwLock<Instant>>,
+        view_change_delta_ms: Option<u16>,
     ) -> Self {
         Self {
             store: Store::new(db_path).unwrap(),
@@ -66,29 +64,55 @@ impl Node {
             lock_responses: HashSet::new(),
             blame_messages: HashSet::new(),
             socket_address: address,
-            timer_start,
+            view_change_delta_ms,
+            timer_start: Instant::now(),
         }
     }
+    /// Runs a check to see if timer expired and acts accordingly
+    pub async fn check_timer(&mut self) {
+        let timer_duration = self.view_change_delta_ms.unwrap();
 
+        let delta = Duration::from_millis(timer_duration.into());
+        if self.timer_start.elapsed() > delta * 8 {
+            self.timer_start = Instant::now();
+            info!("{}: timer expired!", self.socket_address);
+            self.blame_messages.insert(self.socket_address);
+
+            // same as if we receive enough blames (TODO: this needs to check that there is no log for this view?)
+            self.broadcast_to_others(NetworkCommand::Blame {
+                socket_addr: self.socket_address,
+                view: self.current_view,
+                timer_expired: false,
+            })
+            .await;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     /// Runs the node to process network messages incoming in the given receiver
     pub async fn run(
         &mut self,
         mut network_receiver: Receiver<(NetworkCommand, oneshot::Sender<String>)>,
         mut client_receiver: Receiver<(ClientCommand, oneshot::Sender<CommandResult>)>,
-    ) -> JoinHandle<()> {
-        loop {
-            tokio::select! {
-            Some((command, reply_sender)) = client_receiver.recv() => {
-                    info!("Received client message {}", command);
-                    self.proccess_client_msg(command, reply_sender).await;
-                }
-                Some((command, reply_sender)) = network_receiver.recv() => {
-                    info!("Received network message {}", command);
-                    reply_sender.send("ACK".to_string()).unwrap();
-                    self.handle_network_msg(command.clone()).await.unwrap();
-                }
-                else => {
-                    error!("node channels are closed");
+    ) {
+        if self.view_change_delta_ms.is_none() {
+            while let Some((command, reply_sender)) = network_receiver.recv().await {
+                info!("Received network message {}", command);
+                reply_sender.send("ACK".to_string()).unwrap();
+                self.handle_network_msg(command).await.unwrap();
+            }
+        } else {
+            loop {
+                tokio::select! {
+                Some((command, reply_sender)) = client_receiver.recv() => {
+                        info!("Received client message {}", command);
+                        self.proccess_client_msg(command, reply_sender).await;
+                    }
+                    Some((command, reply_sender)) = network_receiver.recv() => {
+                        info!("Received network message {}", command);
+                        reply_sender.send("ACK".to_string()).unwrap();
+                        self.handle_network_msg(command.clone()).await.unwrap();
+                    }
+                    _ = self.check_timer() => ()
                 }
             }
         }
@@ -132,7 +156,7 @@ impl Node {
                     command_view: command_view.clone(),
                 };
 
-                *self.timer_start.write().unwrap() = Instant::now(); // for blame/view-change
+                self.timer_start = Instant::now(); // for blame/view-change
 
                 info!("Received command, broadcasting Propose");
                 self.broadcast_to_others(command).await;
@@ -189,7 +213,7 @@ impl Node {
             (Backup, NetworkCommand::Commit { command_view }) => {
                 info!("about to try commit as a response to Commit message");
 
-                let result = match self.try_commit(command_view).await {
+                match self.try_commit(command_view).await {
                     Ok(result) => {
                         info!(
                             "{}: Committed command, response was {:?}",
@@ -199,8 +223,7 @@ impl Node {
                         Ok(None)
                     }
                     _ => Err(anyhow!("Error committing command")),
-                };
-                result
+                }
             }
             // View change moves the view/primary after enough blames were emitted
             (
@@ -217,7 +240,7 @@ impl Node {
                         self.socket_address,
                         self.get_primary(new_view)
                     );
-                    *self.timer_start.write().unwrap() = Instant::now();
+                    self.timer_start = Instant::now();
                     self.trigger_view_change(new_view);
                 }
                 Ok(None)
@@ -263,7 +286,7 @@ impl Node {
                 "Received lock, did we get quorum? {} responses so far vs expected quorum of {} ",
                 response_count, quorum_count
             );
-            *self.timer_start.write().unwrap() = Instant::now();
+            self.timer_start = Instant::now();
             // broadcast commit, then try commit
             if response_count >= quorum_count {
                 info!("Quorum achieved, commiting first and sending out Commit message!");
@@ -324,7 +347,7 @@ impl Node {
     }
 
     async fn try_commit(&mut self, command_view: CommandView) -> Result<Option<String>> {
-        *self.timer_start.write().unwrap() = Instant::now();
+        self.timer_start = Instant::now();
 
         // handle command, remove command lock (Primray already commits when quorum is achieved)
         if self.command_view_lock != command_view {
@@ -342,7 +365,6 @@ impl Node {
         self.current_view = command_view.view;
         self.command_view_lock.view += 1;
 
-        // handle command
         self.lock_responses.clear();
         self.clear_cmd_view_lock();
 

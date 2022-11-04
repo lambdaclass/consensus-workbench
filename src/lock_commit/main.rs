@@ -1,19 +1,10 @@
+use crate::node::{Node, State};
 use clap::Parser;
 use lib::{command::ClientCommand, network::Receiver};
 use log::{info, warn};
-
-use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::{Arc, RwLock},
-    time::{Duration, Instant},
-};
-
-use crate::{
-    command_ext::NetworkCommand,
-    node::{Node, State},
-};
-
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::task::JoinHandle;
+
 mod command_ext;
 mod node;
 
@@ -30,7 +21,7 @@ struct Cli {
     /// The network address of the node where to send txs.
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
     address: IpAddr,
-    /// if running as a replica, this is the address of the primary
+    /// If running as a replica, this is the address of the primary
     #[clap(
         long,
         value_parser,
@@ -40,8 +31,9 @@ struct Cli {
     )]
     peers: Vec<SocketAddr>,
 
+    /// If view-change mechanism is enabled, you can set the delta time (in ms)
     #[clap(short, long, value_parser, value_name = "UINT")]
-    view_change: bool,
+    view_change_delta_ms: Option<u16>,
 
     /// The key/value store command to execute.
     #[clap(subcommand)]
@@ -59,8 +51,6 @@ async fn main() {
 
     simple_logger::SimpleLogger::new().env().init().unwrap();
 
-    let timer_start = Arc::new(RwLock::new(Instant::now()));
-
     let network_address = SocketAddr::new(cli.address, cli.client_port);
     let client_address = SocketAddr::new(cli.address, cli.network_port);
 
@@ -74,29 +64,9 @@ async fn main() {
         cli.peers,
         &format!(".db_{}", network_address.port()),
         network_address,
-        timer_start.clone(),
+        cli.view_change_delta_ms,
     );
 
-    // todo/fixme: this needs to change and use channels
-    if cli.view_change {
-        tokio::spawn(async move {
-            let delta = Duration::from_millis(1000);
-
-            loop {
-                if timer_start.read().unwrap().elapsed() > delta * 8 {
-                    *timer_start.write().unwrap() = Instant::now();
-                    info!("{}: timer expired!", network_address);
-                    let blame_message = NetworkCommand::Blame {
-                        socket_addr: network_address,
-                        view: 0,
-                        timer_expired: true,
-                    };
-                    let _ = blame_message.send_to(network_address).await;
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        });
-    }
     info!(
         "Node: Running on {}. Primary = {}...",
         node.socket_address,
@@ -146,6 +116,7 @@ async fn send_command(socket_addr: SocketAddr, command: ClientCommand) {
 mod tests {
     use super::*;
     use lib::command::ClientCommand;
+
     use std::fs;
     use tokio::time::{sleep, Duration};
 
@@ -165,15 +136,13 @@ mod tests {
         let network_address_primary: SocketAddr = "127.0.0.1:6380".parse().unwrap();
         let client_address_primary: SocketAddr = "127.0.0.1:6381".parse().unwrap();
 
-        let timer_start = Arc::new(RwLock::new(Instant::now()));
-
         fs::remove_dir_all(".db_test_primary1").unwrap_or_default();
 
         let primary = node::Node::new(
             vec![network_address_primary],
             &db_path("primary"),
             network_address_primary,
-            timer_start,
+            None,
         );
 
         spawn_node_tasks(network_address_primary, client_address_primary, primary).await;
@@ -210,8 +179,6 @@ mod tests {
 
     #[tokio::test()]
     async fn test_replicated_server() {
-        let timer_start = Arc::new(RwLock::new(Instant::now()));
-        let timer_start_secondary = Arc::new(RwLock::new(Instant::now()));
         fs::remove_dir_all(".db_test_primary2").unwrap_or_default();
         fs::remove_dir_all(".db_test_backup2").unwrap_or_default();
 
@@ -225,14 +192,14 @@ mod tests {
             vec![network_address_primary, network_address_replica],
             &db_path("backup2"),
             network_address_replica,
-            timer_start,
+            None,
         );
 
         let primary = node::Node::new(
             vec![network_address_primary, network_address_replica],
             &db_path("primary2"),
             network_address_primary,
-            timer_start_secondary,
+            None,
         );
 
         spawn_node_tasks(network_address_primary, client_address_primary, primary).await;
@@ -281,5 +248,71 @@ mod tests {
         .unwrap();
         assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
+    }
+
+    #[tokio::test()]
+    async fn test_view_change() {
+        let network_address_primary: SocketAddr = "127.0.0.1:9999".parse().unwrap();
+        let client_address_primary: SocketAddr = "127.0.0.1:9100".parse().unwrap();
+
+        let network_address_replica: SocketAddr = "127.0.0.1:9998".parse().unwrap();
+        let client_address_replica: SocketAddr = "127.0.0.1:9998".parse().unwrap();
+
+        let backup = Box::new(node::Node::new(
+            vec![network_address_primary, network_address_replica],
+            &db_path("backup2"),
+            network_address_replica,
+            None,
+        ));
+
+        let primary = Box::new(node::Node::new(
+            vec![network_address_primary, network_address_replica],
+            &db_path("primary2"),
+            network_address_primary,
+            None,
+        ));
+
+        let backup_raw = &*backup as *const Node;
+        let primary_raw = &*primary as *const Node;
+
+        spawn_node_tasks_test(network_address_primary, client_address_primary, primary).await;
+        spawn_node_tasks_test(network_address_replica, client_address_replica, backup).await;
+
+        sleep(Duration::from_millis(1500)).await;
+
+        unsafe {
+            // because ownership moves to spawn_node_tasks_test(), we have to deref the raw pointers
+            // which will have the same memory location because they were boxed
+            assert!((*backup_raw).current_view > 0);
+            assert!((*primary_raw).current_view > 0);
+        }
+    }
+
+    // in order for the `move` not to change Node's memory location, this function takes a Box<Node> instead of a <Node>
+    async fn spawn_node_tasks_test(
+        network_address: SocketAddr,
+        client_address: SocketAddr,
+        mut node: Box<Node>,
+    ) -> (JoinHandle<()>, JoinHandle<()>, JoinHandle<()>) {
+        // listen for peer network tcp connections
+        let (network_tcp_receiver, network_channel_receiver) = Receiver::new(network_address);
+        let network_handle = tokio::spawn(async move {
+            network_tcp_receiver.run().await;
+        });
+
+        // listen for client command tcp connections
+        let (client_tcp_receiver, client_channel_receiver) = Receiver::new(client_address);
+        let client_handle = tokio::spawn(async move {
+            client_tcp_receiver.run().await;
+        });
+
+        // run a task to manage the blockchain node state, listening for messages from client and network
+        let node_handle = tokio::spawn(async move {
+            (*node)
+                .run(network_channel_receiver, client_channel_receiver)
+                .await;
+        });
+
+        (node_handle, network_handle, client_handle)
     }
 }

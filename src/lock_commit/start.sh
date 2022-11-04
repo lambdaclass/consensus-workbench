@@ -1,10 +1,10 @@
 #!/bin/bash
-# Start a number of nodes running on different sockets. The amount of nodes that start should be passed to the script as its only argument.
-# Example call: ./start.sh 3
+# Start a number of nodes running on different sockets. The amount of nodes that start should be passed to the script as its first argument, and the second should be the delta for the timer in miliseconds.
+# Example call: ./start.sh 3 100
 
-if [ $# -ne 1 ]
+if [ $# -ne 1 ] && [ $# -ne 2 ]
 then
-  echo "Incorrect number of arguments. Usage: ./start.sh {number-of-nodes}"
+  echo "Incorrect number of arguments. Usage: ./start.sh {number-of-nodes} {timer-delta-ms}" 
   exit 1
 fi
 
@@ -20,7 +20,7 @@ done
 
 while [ $j -lt $1 ]; do
    PORT=$((6100+$j))
-   RUST_LOG=INFO ../../target/debug/node_lock_commit --port $PORT --peers "$LIST_PEERS" &
+   RUST_LOG=INFO ../../target/debug/node_lock_commit --port $PORT --peers "$LIST_PEERS" -v $2 &
    
    j=$((j + 1))
 done
