@@ -3,7 +3,6 @@ use crate::node::Node;
 use clap::Parser;
 use lib::network::Receiver;
 use log::info;
-use serial_test::serial;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::task::JoinHandle;
 
@@ -88,7 +87,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    #[serial]
+    #[serial_test::serial]
     async fn single_node() {
         let network_address: SocketAddr = "127.0.0.1:9101".parse().unwrap();
         let client_address: SocketAddr = "127.0.0.1:9102".parse().unwrap();
@@ -119,7 +118,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    #[serial]
+    #[serial_test::serial]
     async fn multiple_nodes() {
         let network_address1: SocketAddr = "127.0.0.1:9103".parse().unwrap();
         let network_address2: SocketAddr = "127.0.0.1:9104".parse().unwrap();
@@ -159,7 +158,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    #[serial]
+    #[serial_test::serial]
     async fn new_node_catch_up() {
         // start two nodes
         let network_address1: SocketAddr = "127.0.0.1:9109".parse().unwrap();
@@ -201,7 +200,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    #[serial]
+    #[serial_test::serial]
     async fn node_crash_recover() {
         let network_address1: SocketAddr = "127.0.0.1:9115".parse().unwrap();
         let network_address2: SocketAddr = "127.0.0.1:9116".parse().unwrap();
