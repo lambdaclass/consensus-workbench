@@ -95,7 +95,7 @@ impl Node {
     /// task to produce blocks to extend the node's ledger.
     pub async fn run(
         &mut self,
-        mut network_receiver: Receiver<(Message, oneshot::Sender<()>)>,
+        mut network_receiver: Receiver<(Message, oneshot::Sender<String>)>,
         mut client_receiver: Receiver<(ClientCommand, oneshot::Sender<CommandResult>)>,
     ) -> JoinHandle<()> {
         self.restart_miner();
@@ -130,10 +130,9 @@ impl Node {
                         error!("failed to send message {:?} response {:?}", message, error);
                     };
                 }
-                Some((message, _)) = network_receiver.recv() => {
+                Some((message, reply_sender)) = network_receiver.recv() => {
                     info!("Received network message {}", message);
-
-                    // FIXME network messages shouldn't fail
+                    reply_sender.send("ACK".to_string()).unwrap();
                     self.handle_message(message.clone()).await.unwrap();
                 }
                 else => {

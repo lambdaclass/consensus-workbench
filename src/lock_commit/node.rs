@@ -1,25 +1,22 @@
-use crate::command_ext::{Command, CommandView, NetworkCommand};
+use crate::command_ext::{CommandView, NetworkCommand};
 /// This module contains an implementation nodes that can run in primary or backup mode.
 /// Every Set command to a primary node will be broadcasted reliably for the backup nodes to replicate it.
 /// We plan to add backup promotion in case of primary failure.
 use anyhow::{anyhow, Result};
-use async_trait::async_trait;
 use bytes::Bytes;
-use futures::sink::SinkExt as _;
 use lib::{
-    command::ClientCommand,
-    network::{MessageHandler, SimpleSender, Writer},
+    command::{ClientCommand, CommandResult},
+    network::SimpleSender,
     store::Store,
-    NetworkReceiver, NetworkSender,
 };
-use log::info;
-
+use log::{error, info};
 use std::{
     collections::HashSet,
     net::SocketAddr,
     time::{self, Duration, Instant},
 };
-use tokio::sync::oneshot;
+use tokio::sync::mpsc::Receiver;
+use tokio::sync::oneshot::{self, Sender};
 
 #[derive(Clone)]
 /// A message handler that just forwards key/value store requests from clients to an internal rocksdb store.
@@ -51,33 +48,6 @@ pub enum State {
 
 use State::*;
 
-#[derive(Clone)]
-pub struct NodeReceiverHandler {
-    /// Used to forward incoming TCP messages to the node
-    pub network_sender: NetworkSender<Command>,
-}
-
-#[async_trait]
-impl MessageHandler for NodeReceiverHandler {
-    /// When a TCP message is received, interpret it as a node::Message and forward it to the node task.
-    /// Send the node's response back through the TCP connection.
-    async fn dispatch(&mut self, writer: &mut Writer, bytes: Bytes) -> Result<()> {
-        let request: Command = bincode::deserialize(&bytes)?;
-        log::info!("Received request {:?}", request);
-
-        let (reply_sender, reply_receiver) = oneshot::channel();
-        self.network_sender.send((request, reply_sender)).await?;
-        let reply = reply_receiver.await?.map_err(|e| e.to_string());
-
-        let reply = bincode::serialize(&reply)?;
-        log::info!("Sending response {:?}", reply);
-
-        let _ = writer.send(reply.into()).await?;
-
-        Ok(())
-    }
-}
-
 impl Node {
     pub fn new(
         peers: Vec<SocketAddr>,
@@ -98,7 +68,6 @@ impl Node {
             timer_start: Instant::now(),
         }
     }
-
     /// Runs a check to see if timer expired and acts accordingly
     pub async fn check_timer(&mut self) {
         let timer_duration = self.view_change_delta_ms.unwrap();
@@ -119,39 +88,65 @@ impl Node {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-
-    /// Runs the node to process network messages incoming in the given receiver, and starts a timer for view-change if required
-    pub async fn run(&mut self, mut network_receiver: NetworkReceiver<Command>) {
+    /// Runs the node to process network messages incoming in the given receiver
+    pub async fn run(
+        &mut self,
+        mut network_receiver: Receiver<(NetworkCommand, oneshot::Sender<String>)>,
+        mut client_receiver: Receiver<(ClientCommand, oneshot::Sender<CommandResult>)>,
+    ) {
         if self.view_change_delta_ms.is_none() {
-            while let Some((message, reply_sender)) = network_receiver.recv().await {
-                self.handle_msg(message, reply_sender).await;
+            loop {
+                tokio::select! {
+                Some((command, reply_sender)) = client_receiver.recv() => {
+                        info!("Received client message {}", command);
+                        self.proccess_client_msg(command, reply_sender).await;
+                    }
+                    Some((command, reply_sender)) = network_receiver.recv() => {
+                        info!("Received network message {}", command);
+                        reply_sender.send("ACK".to_string()).unwrap();
+                        self.handle_network_msg(command.clone()).await.unwrap();
+                    }
+                }
             }
         } else {
             loop {
                 tokio::select! {
-                    Some((message, reply_sender)) = network_receiver.recv() => self.handle_msg(message, reply_sender).await,
-                    _ = self.check_timer() => (),
+                Some((command, reply_sender)) = client_receiver.recv() => {
+                        info!("Received client message {}", command);
+                        self.proccess_client_msg(command, reply_sender).await;
+                    }
+                    Some((command, reply_sender)) = network_receiver.recv() => {
+                        info!("Received network message {}", command);
+                        reply_sender.send("ACK".to_string()).unwrap();
+                        self.handle_network_msg(command.clone()).await.unwrap();
+                    }
+                    _ = self.check_timer() => ()
                 }
             }
         }
     }
 
-    /// Process each messages coming from clients and foward events to the replicas
-    pub async fn handle_msg(
+    pub async fn proccess_client_msg(
         &mut self,
-        message: Command,
-        reply_sender: oneshot::Sender<Result<Option<Vec<u8>>>>,
+        command: ClientCommand,
+        reply_sender: Sender<Result<Option<String>, String>>,
     ) {
+        let result = self
+            .handle_client_msg(command.clone())
+            .await
+            .map_err(|e| e.to_string());
+
+        if let Err(error) = reply_sender.send(result) {
+            error!("failed to send message {:?} response {:?}", command, error);
+        };
+    }
+
+    pub async fn handle_client_msg(&mut self, message: ClientCommand) -> Result<Option<String>> {
         let state = self.get_state();
 
-        let result = match (state, message) {
-            // as a 'hack': to make it simpler, we can just forward the Get command to handle_client_message
-            // if you comment this match code block, Get requests will also require quorum but it will still work
-            (_, Command::Client(cmd @ ClientCommand::Get { key: _ })) => {
-                self.handle_client_command(cmd).await
-            }
-            // if we receive a client command that is not a get and we are primary, prepare to propose
-            (Primary, Command::Client(client_comand)) => {
+        match (state, message) {
+            (_, cmd @ ClientCommand::Get { key: _ }) => self.handle_client_command(cmd).await,
+            (Primary, client_comand) => {
                 // we advance the view according to the primary and propose it
                 let command_view = CommandView {
                     command: client_comand,
@@ -176,19 +171,33 @@ impl Node {
 
                 Ok(None)
             }
+            (Backup, client_command) => {
+                info!("Received client command, forwarding to primary");
+                self.send_to_primary(NetworkCommand::Forward {
+                    command: client_command,
+                })
+                .await;
+                Ok(None)
+            }
+        }
+    }
+    /// Process each messages coming from clients and foward events to the replicas
+    pub async fn handle_network_msg(&mut self, message: NetworkCommand) -> Result<Option<String>> {
+        let state = self.get_state();
 
+        match (state, message) {
             // Once we proposed and we receive lock requests as a Primary, we can start counting the responses
             (
                 Primary,
-                Command::Network(NetworkCommand::Lock {
+                NetworkCommand::Lock {
                     socket_addr,
                     command_view,
-                }),
+                },
             ) => self.handle_lock_message(socket_addr, command_view).await,
 
             // a command has been proposed and we can lock it before sending a Lock message
             // for now this happens in the Primary as well, but that functionality could be piggy-backed in the section where we receive the command
-            (_, Command::Network(NetworkCommand::Propose { command_view })) => {
+            (_, NetworkCommand::Propose { command_view }) => {
                 // TODO: You should only lock if view number is expected?
                 self.lock_command_view(&command_view);
                 info!(
@@ -196,27 +205,22 @@ impl Node {
                     self.socket_address
                 );
 
-                let lock_command = Command::Network(NetworkCommand::Lock {
+                let lock_command = NetworkCommand::Lock {
                     socket_addr: self.socket_address,
                     command_view,
-                });
+                };
 
                 self.send_to_primary(lock_command).await;
                 Ok(None)
             }
 
-            (Backup, Command::Client(client_command)) => {
-                info!("Received client command, forwarding to primary");
-
-                self.send_to_primary(Command::Client(client_command)).await;
-                Ok(None)
-            }
-
             // for the primary, the command is committed as we reach quorum, so we can return Ok
-            (Primary, Command::Network(NetworkCommand::Commit { .. })) => Ok(None),
+            (Primary, NetworkCommand::Commit { .. }) => Ok(None),
 
             // the backup gets a Commit message after we reach quorum, so we can go ahead and commit
-            (Backup, Command::Network(NetworkCommand::Commit { command_view })) => {
+            (Backup, NetworkCommand::Commit { command_view }) => {
+                info!("about to try commit as a response to Commit message");
+
                 match self.try_commit(command_view).await {
                     Ok(result) => {
                         info!(
@@ -232,11 +236,11 @@ impl Node {
             // View change moves the view/primary after enough blames were emitted
             (
                 _,
-                Command::Network(NetworkCommand::ViewChange {
+                NetworkCommand::ViewChange {
                     socket_addr: _,
                     new_view,
                     highest_lock: _,
-                }),
+                },
             ) => {
                 if new_view > self.current_view {
                     info!(
@@ -253,26 +257,28 @@ impl Node {
             // this differentiation is so that we can make the protocol partially synchronous instead of synchronous
             (
                 _,
-                Command::Network(NetworkCommand::Blame {
+                NetworkCommand::Blame {
                     socket_addr,
                     view,
                     timer_expired,
-                }),
+                },
             ) => self.handle_blame(view, socket_addr, timer_expired).await,
+            (_, NetworkCommand::Forward { command }) => {
+                self.handle_client_msg(command).await.unwrap();
+                Ok(None)
+            }
             _ => {
                 info!("{} :unhandled command", self.socket_address);
                 Err(anyhow!("Unhandled command"))
             }
-        };
-
-        let _ = reply_sender.send(result);
+        }
     }
 
     async fn handle_lock_message(
         &mut self,
         socket_addr: SocketAddr,
         command_view: CommandView,
-    ) -> Result<Option<Vec<u8>>, anyhow::Error> {
+    ) -> Result<Option<String>> {
         if command_view.view <= self.current_view {
             info!("Received command with an old, previously committed view, discarding");
             Ok(None)
@@ -303,29 +309,31 @@ impl Node {
         }
     }
 
-    async fn handle_client_command(
-        &self,
-        command: ClientCommand,
-    ) -> Result<Option<Vec<u8>>, anyhow::Error> {
+    async fn handle_client_command(&self, command: ClientCommand) -> Result<Option<String>> {
         match command {
-            ClientCommand::Set { key, value } => self.store.write(key.into(), value.into()).await,
-            ClientCommand::Get { key } => self.store.read(key.clone().into()).await,
+            ClientCommand::Set { key, value } => {
+                self.store.write(key.into(), value.clone().into()).await?;
+                Ok(Some(value))
+            }
+            ClientCommand::Get { key } => {
+                if let Ok(Some(val)) = self.store.read(key.clone().into()).await {
+                    let value = String::from_utf8(val)?;
+                    return Ok(Some(value));
+                }
+                Ok(None)
+            }
         }
     }
 
     async fn broadcast(&mut self, network_command: NetworkCommand) {
-        let message: Bytes = bincode::serialize(&Command::Network(network_command))
-            .unwrap()
-            .into();
+        let message: Bytes = bincode::serialize(&network_command).unwrap().into();
 
         // forward the command to all replicas and wait for them to respond
         self.sender.broadcast(self.peers.clone(), message).await;
     }
 
     async fn broadcast_to_others(&mut self, network_command: NetworkCommand) {
-        let message: Bytes = bincode::serialize(&Command::Network(network_command))
-            .unwrap()
-            .into();
+        let message: Bytes = bincode::serialize(&network_command).unwrap().into();
 
         let other_peers: Vec<SocketAddr> = self
             .peers
@@ -338,7 +346,7 @@ impl Node {
         self.sender.broadcast(other_peers, message).await;
     }
 
-    async fn send_to_primary(&mut self, cmd: Command) {
+    async fn send_to_primary(&mut self, cmd: NetworkCommand) {
         let message: Bytes = bincode::serialize(&cmd).unwrap().into();
         let primary_address = *(self.get_primary(self.current_view));
 
@@ -346,7 +354,7 @@ impl Node {
         self.sender.send(primary_address, message).await;
     }
 
-    async fn try_commit(&mut self, command_view: CommandView) -> Result<Option<Vec<u8>>> {
+    async fn try_commit(&mut self, command_view: CommandView) -> Result<Option<String>> {
         self.timer_start = Instant::now();
 
         // handle command, remove command lock (Primray already commits when quorum is achieved)
@@ -409,7 +417,7 @@ impl Node {
         view: u128,
         socket_addr: SocketAddr,
         timer_expired: bool,
-    ) -> Result<Option<Vec<u8>>> {
+    ) -> Result<Option<String>> {
         if view != self.current_view && !timer_expired {
             return Ok(None);
         }

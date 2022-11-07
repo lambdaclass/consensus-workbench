@@ -1,22 +1,22 @@
+use crate::node::Node;
 /// This module is a binary that listens for TCP connections, runs a node and forwards to it incoming client and peer messages.
 use clap::Parser;
+use lib::network::Receiver;
 use log::info;
-use receiver::Receiver;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::task::JoinHandle;
 
-use crate::node::Node;
-
 mod ledger;
 mod node;
-mod receiver;
 
 #[derive(Parser)]
 #[clap(author, version, about)]
 struct Cli {
     /// The network port of the node where to send txs.
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = 6100)]
-    port: u16,
+    client_port: u16,
+    #[clap(short, long, value_parser, value_name = "UINT", default_value_t = 6200)]
+    network_port: u16,
     /// The network address of the node where to send txs.
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
     address: IpAddr,
@@ -29,13 +29,15 @@ struct Cli {
 async fn main() {
     let cli = Cli::parse();
 
-    info!("Node socket: {}:{}", cli.address, cli.port);
+    info!(
+        "Node socket for client request {}:{}, network request: {}:{}",
+        cli.address, cli.client_port, cli.address, cli.network_port
+    );
 
     simple_logger::SimpleLogger::new().env().init().unwrap();
 
-    let network_address = SocketAddr::new(cli.address, cli.port);
-    // FIXME lazily assuming +1000 for client port. move to CLI if anyone cares about it
-    let client_address = SocketAddr::new(cli.address, cli.port + 1000);
+    let network_address = SocketAddr::new(cli.address, cli.client_port);
+    let client_address = SocketAddr::new(cli.address, cli.network_port);
 
     let (_, network_handle, _) = spawn_node_tasks(network_address, client_address, cli.seed).await;
 
@@ -85,9 +87,10 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial]
     async fn single_node() {
-        let network_address: SocketAddr = "127.0.0.1:6379".parse().unwrap();
-        let client_address: SocketAddr = "127.0.0.1:7379".parse().unwrap();
+        let network_address: SocketAddr = "127.0.0.1:9101".parse().unwrap();
+        let client_address: SocketAddr = "127.0.0.1:9102".parse().unwrap();
         spawn_node_tasks(network_address, client_address, None).await;
 
         // get k1 -> null
@@ -114,15 +117,16 @@ mod tests {
         assert_eventually_equals(client_address, "k1", "v1").await;
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial]
     async fn multiple_nodes() {
-        let network_address1: SocketAddr = "127.0.0.1:6279".parse().unwrap();
-        let network_address2: SocketAddr = "127.0.0.1:6289".parse().unwrap();
-        let network_address3: SocketAddr = "127.0.0.1:6299".parse().unwrap();
+        let network_address1: SocketAddr = "127.0.0.1:9103".parse().unwrap();
+        let network_address2: SocketAddr = "127.0.0.1:9104".parse().unwrap();
+        let network_address3: SocketAddr = "127.0.0.1:9105".parse().unwrap();
 
-        let client_address1: SocketAddr = "127.0.0.1:7279".parse().unwrap();
-        let client_address2: SocketAddr = "127.0.0.1:7289".parse().unwrap();
-        let client_address3: SocketAddr = "127.0.0.1:7299".parse().unwrap();
+        let client_address1: SocketAddr = "127.0.0.1:9106".parse().unwrap();
+        let client_address2: SocketAddr = "127.0.0.1:9107".parse().unwrap();
+        let client_address3: SocketAddr = "127.0.0.1:9108".parse().unwrap();
         spawn_node_tasks(network_address1, client_address1, None).await;
         spawn_node_tasks(network_address2, client_address2, Some(network_address1)).await;
         spawn_node_tasks(network_address3, client_address3, Some(network_address1)).await;
@@ -153,14 +157,15 @@ mod tests {
         assert_eventually_equals(client_address3, "k1", "v2").await;
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial]
     async fn new_node_catch_up() {
         // start two nodes
-        let network_address1: SocketAddr = "127.0.0.1:6179".parse().unwrap();
-        let network_address2: SocketAddr = "127.0.0.1:6189".parse().unwrap();
+        let network_address1: SocketAddr = "127.0.0.1:9109".parse().unwrap();
+        let network_address2: SocketAddr = "127.0.0.1:9110".parse().unwrap();
 
-        let client_address1: SocketAddr = "127.0.0.1:7179".parse().unwrap();
-        let client_address2: SocketAddr = "127.0.0.1:7189".parse().unwrap();
+        let client_address1: SocketAddr = "127.0.0.1:9111".parse().unwrap();
+        let client_address2: SocketAddr = "127.0.0.1:9112".parse().unwrap();
         spawn_node_tasks(network_address1, client_address1, None).await;
         spawn_node_tasks(network_address2, client_address2, Some(network_address1)).await;
 
@@ -188,21 +193,22 @@ mod tests {
         assert_eventually_equals(client_address2, "k1", "v2").await;
 
         // start another node, which should eventually catch up with the longest chain from its peers
-        let network_address3: SocketAddr = "127.0.0.1:6199".parse().unwrap();
-        let client_address3: SocketAddr = "127.0.0.1:7199".parse().unwrap();
+        let network_address3: SocketAddr = "127.0.0.1:9113".parse().unwrap();
+        let client_address3: SocketAddr = "127.0.0.1:9114".parse().unwrap();
         spawn_node_tasks(network_address3, client_address3, Some(network_address1)).await;
         assert_eventually_equals(client_address3, "k1", "v2").await;
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial]
     async fn node_crash_recover() {
-        let network_address1: SocketAddr = "127.0.0.1:6579".parse().unwrap();
-        let network_address2: SocketAddr = "127.0.0.1:6589".parse().unwrap();
-        let network_address3: SocketAddr = "127.0.0.1:6599".parse().unwrap();
+        let network_address1: SocketAddr = "127.0.0.1:9115".parse().unwrap();
+        let network_address2: SocketAddr = "127.0.0.1:9116".parse().unwrap();
+        let network_address3: SocketAddr = "127.0.0.1:9117".parse().unwrap();
 
-        let client_address1: SocketAddr = "127.0.0.1:7579".parse().unwrap();
-        let client_address2: SocketAddr = "127.0.0.1:7589".parse().unwrap();
-        let client_address3: SocketAddr = "127.0.0.1:7599".parse().unwrap();
+        let client_address1: SocketAddr = "127.0.0.1:9118".parse().unwrap();
+        let client_address2: SocketAddr = "127.0.0.1:9119".parse().unwrap();
+        let client_address3: SocketAddr = "127.0.0.1:9120".parse().unwrap();
 
         spawn_node_tasks(network_address1, client_address1, None).await;
         // keep the handles to abort later

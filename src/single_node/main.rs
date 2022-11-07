@@ -1,12 +1,10 @@
+use crate::node::Node;
 /// This modules implements the most basic form of distributed system, a single node server that handles
 /// client requests to a key/value store. There is no replication and this no fault-tolerance.
 use clap::Parser;
-use lib::network::Receiver as NetworkReceiver;
+use lib::network::Receiver;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-
-use crate::node::{Node, NodeReceiverHandler};
 
 mod node;
 pub const CHANNEL_CAPACITY: usize = 1_000;
@@ -32,25 +30,29 @@ async fn main() {
 
     let address = SocketAddr::new(cli.address, cli.port);
 
-    let (network_handle, _) = spawn_node_tasks(address).await;
+    let node = Node::new();
+
+    let (network_handle, _) = spawn_node_tasks(address, node).await;
 
     network_handle.await.unwrap();
 }
 
-async fn spawn_node_tasks(address: SocketAddr) -> (JoinHandle<()>, JoinHandle<()>) {
-    let (network_sender, network_receiver) = mpsc::channel(CHANNEL_CAPACITY);
+async fn spawn_node_tasks(
+    client_address: SocketAddr,
+    mut node: Node,
+) -> (JoinHandle<()>, JoinHandle<()>) {
+    // listen for client command tcp connections
+    let (client_tcp_receiver, client_channel_receiver) = Receiver::new(client_address);
 
-    let newtor_handle = tokio::spawn(async move {
-        let mut node = Node::new();
-        node.run(network_receiver).await;
+    let client_handle = tokio::spawn(async move {
+        client_tcp_receiver.run().await;
     });
 
     let node_handle = tokio::spawn(async move {
-        let receiver = NetworkReceiver::new(address, NodeReceiverHandler { network_sender });
-        receiver.run().await;
+        node.run(client_channel_receiver).await;
     });
 
-    (newtor_handle, node_handle)
+    (node_handle, client_handle)
 }
 
 #[cfg(test)]
@@ -65,7 +67,9 @@ mod tests {
         fs::remove_dir_all(".db_single_node").unwrap_or_default();
 
         let address: SocketAddr = "127.0.0.1:6182".parse().unwrap();
-        spawn_node_tasks(address).await;
+        let node = Node::new();
+
+        spawn_node_tasks(address, node).await;
 
         sleep(Duration::from_millis(10)).await;
 
