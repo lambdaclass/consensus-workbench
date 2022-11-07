@@ -9,6 +9,7 @@ use lib::{network::SimpleSender, store::Store};
 use log::{error, info};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -27,8 +28,18 @@ pub enum Message {
 
     /// A primary node's heartbeat including the currently known peers
     // this is just for illustration purposes not being used yet
-    Heartbeat { peers: Vec<SocketAddr> },
+    Heartbeat,
+
+    /// A request from the new primary to update the view
+    ViewChange,
+
+    /// Get Primary Address
+    PrimaryAddress,
 }
+
+const HEARTBEAT_CICLE: usize = 3;
+const PRIMARY_TIMEOUT: usize = 8;
+const CICLE_TIME: u64 = 100;
 
 /// Safe serialization helper. Logs on error.
 fn serialize<T: Serialize + fmt::Debug>(message: &T) -> Option<Bytes> {
@@ -52,9 +63,12 @@ impl fmt::Display for Message {
 pub struct Node {
     pub state: State,
     pub store: Store,
+    pub cicle: usize,
+    pub view: usize,
     pub peers: Vec<SocketAddr>,
     pub sender: SimpleSender,
     address: SocketAddr,
+    view_change_delta_ms: u16,
 }
 
 /// The state of a node viewed as a state-machine.
@@ -69,36 +83,45 @@ use Message::*;
 use State::*;
 
 impl Node {
-    pub fn primary(db_path: &str, address: SocketAddr) -> Self {
+    pub fn primary(db_path: &str, address: SocketAddr, peers: Vec<SocketAddr>) -> Self {
         Self {
             address,
             state: Primary,
             store: Store::new(db_path).unwrap(),
-            peers: vec![],
+            view: 0,
+            cicle: 0,
+            peers,
             sender: SimpleSender::new(),
+            view_change_delta_ms: 100,
         }
     }
 
-    pub fn backup(db_path: &str, address: SocketAddr) -> Self {
+    pub fn backup(db_path: &str, address: SocketAddr, peers: Vec<SocketAddr>) -> Self {
         Self {
             address,
             state: Backup,
             store: Store::new(db_path).unwrap(),
-            peers: vec![],
+            peers,
+            cicle: 0,
+            view: 0,
             sender: SimpleSender::new(),
+            view_change_delta_ms: 100,
         }
     }
 }
 
 impl Node {
-    async fn forward_to_replicas(&mut self, command: Message) {
-        let sync_message: Bytes = bincode::serialize(&command).unwrap().into();
+    async fn broadcast_to_others(&mut self, command: Message) {
+        let message: Bytes = bincode::serialize(&command).unwrap().into();
+        let peers = &self.peers[self.view..];
+        let other_peers: Vec<SocketAddr> = peers
+            .iter()
+            .copied()
+            .filter(|x| *x != self.address)
+            .collect();
 
         // forward the command to all replicas and wait for them to respond
-        info!("Forwarding set to {:?}", self.peers);
-        self.sender
-            .broadcast(self.peers.clone(), sync_message)
-            .await;
+        self.sender.broadcast(other_peers, message).await;
     }
 
     /// Runs the node to process network messages incoming in the given receiver
@@ -125,18 +148,52 @@ impl Node {
                     reply_sender.send("ACK".to_string()).unwrap();
                     self.handle_msg(message.clone()).await.unwrap();
                 }
-                else => {
-                    error!("node channels are closed");
-                }
+                _ = self.check_timer() => ()
             }
         }
     }
 
+    //     Cada nodo tiene una lista con todos los nodos, ordenados de tal manera que el primero es el primer pimary.
+    // Cada nodo tiene una vista que basicamente dice en que posicion de la lista de nodos esta el primary.
+    // En cada ciclo (entre ciclo y ciclo hay un t dentro de un sleep):
+    // Si es primary envio un hearthbeat
+    // Si soy el primer backup (osea vista + 1) checkeo si se paso un tiempo a definir desde el ultimo hearthbeat.
+    // Si efectivamente se paso:
+    // Cambio el estado a primary.
+    // Actualizo la vista y notifico al resto.
+    pub async fn check_timer(&mut self) {
+        let timer_duration = self.view_change_delta_ms;
+
+        let delta = Duration::from_millis(timer_duration.into());
+
+        match self.state {
+            State::Primary => {
+                if self.cicle >= HEARTBEAT_CICLE {
+                    self.broadcast_to_others(Heartbeat).await;
+                    self.cicle = 0;
+                } else {
+                    self.cicle += 1;
+                }
+            }
+            State::Backup => {
+                if self.cicle >= PRIMARY_TIMEOUT {
+                    self.state = State::Primary;
+                    self.view += 1;
+                    self.broadcast_to_others(ViewChange).await;
+                    self.cicle = 0
+                } else {
+                    self.cicle += 1;
+                }
+            }
+        }
+
+        tokio::time::sleep(Duration::from_millis(CICLE_TIME)).await;
+    }
     /// Process each messages coming from clients and foward events to the replicas
     pub async fn handle_msg(&mut self, message: Message) -> Result<Option<String>> {
         match (self.state, message) {
             (Primary, Command(Set { key, value })) => {
-                self.forward_to_replicas(Replicate(
+                self.broadcast_to_others(Replicate(
                     Set {
                         key: key.clone(),
                         value: value.clone(),
@@ -144,6 +201,7 @@ impl Node {
                     self.address,
                 ))
                 .await;
+                self.cicle = 0;
                 self.store
                     .write(key.clone().into(), value.clone().into())
                     .await?;
@@ -151,7 +209,7 @@ impl Node {
                 Ok(Some(value))
             }
             (Backup, Replicate(Set { key, value }, reply_to)) => {
-                self.forward_to_replicas(Replicate(
+                self.broadcast_to_others(Replicate(
                     Set {
                         key: key.clone(),
                         value: value.clone(),
@@ -160,11 +218,16 @@ impl Node {
                 ))
                 .await;
 
+                self.cicle = 0;
                 self.store.write(key.into(), value.clone().into()).await?;
 
                 if let Some(data) = serialize(&value) {
                     self.sender.send(reply_to, data).await;
                 }
+                Ok(None)
+            }
+            (Backup, Heartbeat) => {
+                self.cicle = 0;
                 Ok(None)
             }
             (_, Subscribe { address }) => {
@@ -180,6 +243,7 @@ impl Node {
 
                 Ok(None)
             }
+            (_, PrimaryAddress) => Ok(Some(self.peers[self.view].to_string())),
             _ => Err(anyhow!("Unhandled command")),
         }
     }

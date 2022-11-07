@@ -35,53 +35,56 @@ struct Cli {
 async fn main() {
     let cli = Cli::parse();
 
-    info!(
-        "Node socket for client request {}:{}, network request: {}:{}",
-        cli.address, cli.client_port, cli.address, cli.network_port
-    );
+    // info!(
+    //     "Node socket for client request {}:{}, network request: {}:{}",
+    //     cli.address, cli.client_port, cli.address, cli.network_port
+    // );
 
-    simple_logger::SimpleLogger::new()
-        .env()
-        .with_level(log::LevelFilter::Info)
-        .init()
-        .unwrap();
+    // simple_logger::SimpleLogger::new()
+    //     .env()
+    //     .with_level(log::LevelFilter::Info)
+    //     .init()
+    //     .unwrap();
 
-    let network_address = SocketAddr::new(cli.address, cli.client_port);
-    let client_address = SocketAddr::new(cli.address, cli.network_port);
+    // let network_address = SocketAddr::new(cli.address, cli.client_port);
+    // let client_address = SocketAddr::new(cli.address, cli.network_port);
+    // let peers = Vec::new([])
 
-    let node = if let Some(primary_address) = cli.primary {
-        info!(
-            "Replica: Running as replica on {}, waiting for commands from the primary node...",
-            network_address
-        );
+    // let node = if let Some(primary_address) = cli.primary {
+    //     info!(
+    //         "Replica: Running as replica on {}, waiting for commands from the primary node...",
+    //         network_address
+    //     );
 
-        info!("Subscribing to primary: {}.", primary_address);
+    //     info!("Subscribing to primary: {}.", primary_address);
 
-        // TODO: this "Subscribe" message is sent here for testing purposes.
-        //       But it shouldn't be here. We should have an initialization loop
-        //       inside the actual replica node to handle the response, deal with
-        //       errors, and eventually reconnect to a new primary.
-        let mut sender = SimpleSender::new();
-        let subscribe_message: Bytes = bincode::serialize(&Message::Subscribe {
-            address: network_address,
-        })
-        .unwrap()
-        .into();
-        sender.send(primary_address, subscribe_message).await;
+    //     // TODO: this "Subscribe" message is sent here for testing purposes.
+    //     //       But it shouldn't be here. We should have an initialization loop
+    //     //       inside the actual replica node to handle the response, deal with
+    //     //       errors, and eventually reconnect to a new primary.
+    //     let mut sender = SimpleSender::new();
+    //     let subscribe_message: Bytes = bincode::serialize(&Message::Subscribe {
+    //         address: network_address,
+    //     })
+    //     .unwrap()
+    //     .into();
+    //     sender.send(primary_address, subscribe_message).await;
 
-        Node::backup(
-            &db_name(&cli, &format!("replic-{}", cli.network_port)[..]),
-            network_address,
-        )
-    } else {
-        info!("Primary: Running as primary on {}.", network_address);
+    //     Node::backup(
+    //         &db_name(&cli, &format!("replic-{}", cli.network_port)[..]),
+    //         network_address,
+    //     )
+    // } else {
+    //     info!("Primary: Running as primary on {}.", network_address);
 
-        let db_name = db_name(&cli, "primary");
-        Node::primary(&db_name, network_address)
-    };
+    //     let db_name = db_name(&cli, "primary");
+    //     Node::primary(&db_name, network_address)
+    // };
 
-    let (_, network_handle, _) = spawn_node_tasks(network_address, client_address, node).await;
-    network_handle.await.unwrap();
+    // let (_, network_handle, _) = spawn_node_tasks(network_address, client_address, node).await;
+    // network_handle.await.unwrap();
+
+    println!("hola");
 }
 
 async fn spawn_node_tasks(
@@ -143,7 +146,10 @@ mod tests {
     async fn test_only_primary_server() {
         let network_address: SocketAddr = "127.0.0.1:6680".parse().unwrap();
         let client_address: SocketAddr = "127.0.0.1:6780".parse().unwrap();
-        let node = node::Node::primary(&db_path("primary1"), network_address);
+        let mut peers = Vec::new();
+        peers.push(network_address.clone());
+
+        let node = node::Node::primary(&db_path("primary1"), network_address, peers);
         spawn_node_tasks(network_address, client_address, node).await;
 
         sleep(Duration::from_millis(2000)).await;
@@ -188,10 +194,19 @@ mod tests {
         let network_address_replica: SocketAddr = "127.0.0.1:6980".parse().unwrap();
         let client_address_replica: SocketAddr = "127.0.0.1:6981".parse().unwrap();
 
-        let primary = node::Node::primary(&db_path("db_test_primary2"), network_address_primary);
+        let mut peers = Vec::new();
+        peers.push(network_address_primary.clone());
+        peers.push(network_address_replica.clone());
+
+        let primary = node::Node::primary(
+            &db_path("db_test_primary2"),
+            network_address_primary,
+            peers.clone(),
+        );
         spawn_node_tasks(network_address_primary, client_address_primary, primary).await;
 
-        let backup = node::Node::backup(&db_path("db_test_backup2"), network_address_replica);
+        let backup =
+            node::Node::backup(&db_path("db_test_backup2"), network_address_replica, peers);
         spawn_node_tasks(network_address_replica, client_address_replica, backup).await;
 
         // TODO: this "Subscribe" message is sent here for testing purposes.
