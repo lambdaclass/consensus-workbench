@@ -95,10 +95,18 @@ impl Node {
         mut client_receiver: Receiver<(ClientCommand, oneshot::Sender<CommandResult>)>,
     ) {
         if self.view_change_delta_ms.is_none() {
-            while let Some((command, reply_sender)) = network_receiver.recv().await {
-                info!("Received network message {}", command);
-                reply_sender.send("ACK".to_string()).unwrap();
-                self.handle_network_msg(command).await.unwrap();
+            loop {
+                tokio::select! {
+                Some((command, reply_sender)) = client_receiver.recv() => {
+                        info!("Received client message {}", command);
+                        self.proccess_client_msg(command, reply_sender).await;
+                    }
+                    Some((command, reply_sender)) = network_receiver.recv() => {
+                        info!("Received network message {}", command);
+                        reply_sender.send("ACK".to_string()).unwrap();
+                        self.handle_network_msg(command.clone()).await.unwrap();
+                    }
+                }
             }
         } else {
             loop {

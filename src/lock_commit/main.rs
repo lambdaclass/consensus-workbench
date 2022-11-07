@@ -142,7 +142,7 @@ mod tests {
             vec![network_address_primary],
             &db_path("primary"),
             network_address_primary,
-            None,
+            Some(100),
         );
 
         spawn_node_tasks(network_address_primary, client_address_primary, primary).await;
@@ -192,14 +192,14 @@ mod tests {
             vec![network_address_primary, network_address_replica],
             &db_path("backup2"),
             network_address_replica,
-            None,
+            Some(100),
         );
 
         let primary = node::Node::new(
             vec![network_address_primary, network_address_replica],
             &db_path("primary2"),
             network_address_primary,
-            None,
+            Some(100),
         );
 
         spawn_node_tasks(network_address_primary, client_address_primary, primary).await;
@@ -252,24 +252,24 @@ mod tests {
 
     #[tokio::test()]
     async fn test_view_change() {
-        let network_address_primary: SocketAddr = "127.0.0.1:9999".parse().unwrap();
-        let client_address_primary: SocketAddr = "127.0.0.1:9100".parse().unwrap();
+        let network_address_primary: SocketAddr = "127.0.0.1:10000".parse().unwrap();
+        let client_address_primary: SocketAddr = "127.0.0.1:10001".parse().unwrap();
 
-        let network_address_replica: SocketAddr = "127.0.0.1:9998".parse().unwrap();
-        let client_address_replica: SocketAddr = "127.0.0.1:9998".parse().unwrap();
+        let network_address_replica: SocketAddr = "127.0.0.1:10002".parse().unwrap();
+        let client_address_replica: SocketAddr = "127.0.0.1:10003".parse().unwrap();
 
         let backup = Box::new(node::Node::new(
             vec![network_address_primary, network_address_replica],
-            &db_path("backup2"),
+            &db_path("backup3"),
             network_address_replica,
-            None,
+            Some(100),
         ));
 
         let primary = Box::new(node::Node::new(
             vec![network_address_primary, network_address_replica],
-            &db_path("primary2"),
+            &db_path("primary3"),
             network_address_primary,
-            None,
+            Some(100),
         ));
 
         let backup_raw = &*backup as *const Node;
