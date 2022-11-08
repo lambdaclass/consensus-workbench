@@ -118,6 +118,11 @@ impl Node {
         self.sender.broadcast(other_peers, message).await;
     }
 
+
+    async fn send_primary(&mut self, command: Message) {
+        let message: Bytes = bincode::serialize(&command).unwrap().into();
+        self.sender.send(self.get_primary(), message).await;
+    }
     /// Runs the node to process network messages incoming in the given receiver
     pub async fn run(
         &mut self,
@@ -204,21 +209,16 @@ impl Node {
                 Ok(Some(value))
             }
             (Backup, Replicate(Set { key, value }, reply_to)) => {
-                self.broadcast_to_others(Replicate(
-                    Set {
-                        key: key.clone(),
-                        value: value.clone(),
-                    },
-                    self.address,
-                ))
-                .await;
-
                 self.cicle = 0;
                 self.store.write(key.into(), value.clone().into()).await?;
 
                 if let Some(data) = serialize(&value) {
                     self.sender.send(reply_to, data).await;
                 }
+                Ok(None)
+            }
+            (Backup, message @ Command(Set {key: _, value: _})) => {
+                self.send_primary(message).await;
                 Ok(None)
             }
             (Backup, Heartbeat) => {
@@ -238,8 +238,13 @@ impl Node {
 
                 Ok(None)
             }
-            (_, PrimaryAddress) => Ok(Some(self.peers[self.view].to_string())),
+            (_, PrimaryAddress) => Ok(Some(self.get_primary().to_string())),
             _ => Err(anyhow!("Unhandled command")),
         }
+
+    }
+
+    fn get_primary(&self) ->  SocketAddr {
+        self.peers[self.view]
     }
 }

@@ -83,8 +83,6 @@ async fn main() {
 
     let (_, network_handle, _) = spawn_node_tasks(network_address, client_address, node).await;
     network_handle.await.unwrap();
-
-    println!("hola");
 }
 
 async fn spawn_node_tasks(
@@ -265,15 +263,6 @@ mod tests {
 
         assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
-
-        // should fail since replica should not respond to set commands
-        let reply = ClientCommand::Set {
-            key: "k3".to_string(),
-            value: "_".to_string(),
-        }
-        .send_to(client_address_replica)
-        .await;
-        assert!(reply.is_err());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -284,23 +273,16 @@ mod tests {
         let network_address_replica: SocketAddr = "127.0.0.1:6992".parse().unwrap();
         let client_address_replica: SocketAddr = "127.0.0.1:6993".parse().unwrap();
 
-        let mut primary_peers = Vec::new();
-        primary_peers.push(network_address_primary.clone());
-        
-        let mut backup_peers = Vec::new();
-        backup_peers.push(network_address_primary.clone());
-        backup_peers.push(network_address_replica.clone());
-
-
         let primary = node::Node::primary(
             &db_path("db_test_primary3"),
             network_address_primary,
-            primary_peers,
+            vec![network_address_primary.clone()]
         );
         spawn_node_tasks(network_address_primary, client_address_primary, primary).await;
 
         let backup =
-            node::Node::backup(&db_path("db_test_backup3"), network_address_replica, backup_peers);
+            node::Node::backup(&db_path("db_test_backup3"), network_address_replica, vec![network_address_primary.clone(), network_address_replica.clone()]
+        );
         spawn_node_tasks(network_address_replica, client_address_replica, backup).await;
 
         tokio::time::sleep(Duration::from_millis(1000 * 9)).await;
@@ -328,32 +310,19 @@ mod tests {
         let network_address_second_replica: SocketAddr = "127.0.0.1:6998".parse().unwrap();
         let client_address_second_replica: SocketAddr = "127.0.0.1:6999".parse().unwrap();
 
-        let mut primary_peers = Vec::new();
-        primary_peers.push(network_address_primary.clone());
-
-        let mut backup_peers = Vec::new();
-        backup_peers.push(network_address_primary.clone());
-        backup_peers.push(network_address_replica.clone());
-        backup_peers.push(network_address_second_replica.clone());
-
-        let mut second_backup_peers = Vec::new();
-        second_backup_peers.push(network_address_primary.clone());
-        second_backup_peers.push(network_address_replica.clone());
-        second_backup_peers.push(network_address_second_replica.clone());
-
         let primary = node::Node::primary(
             &db_path("db_test_primary4"),
             network_address_primary,
-            primary_peers,
+            vec![network_address_primary.clone()]
         );
         spawn_node_tasks(network_address_primary, client_address_primary, primary).await;
 
         let backup =
-            node::Node::backup(&db_path("db_test_backup4"), network_address_replica, backup_peers);
+            node::Node::backup(&db_path("db_test_backup4"), network_address_replica, vec![network_address_primary.clone(),network_address_replica.clone(), network_address_second_replica.clone()]);
         spawn_node_tasks(network_address_replica, client_address_replica, backup).await;
 
         let second_backup =
-        node::Node::backup(&db_path("db_test_backup5"), network_address_second_replica, second_backup_peers);
+        node::Node::backup(&db_path("db_test_backup5"), network_address_second_replica, vec![network_address_primary.clone(),network_address_replica.clone(), network_address_second_replica.clone()]);
         spawn_node_tasks(network_address_second_replica, client_address_second_replica, second_backup).await;
 
         tokio::time::sleep(Duration::from_millis(1000 * 9)).await;
@@ -393,5 +362,72 @@ mod tests {
 
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_send_set_command_to_backup_is_forwarded_to_primary() {
+        let network_address_primary: SocketAddr = "127.0.0.1:7001".parse().unwrap();
+        let client_address_primary: SocketAddr = "127.0.0.1:7002".parse().unwrap();
+
+        let network_address_replica: SocketAddr = "127.0.0.1:7003".parse().unwrap();
+        let client_address_replica: SocketAddr = "127.0.0.1:7004".parse().unwrap();
+
+        let network_address_second_replica: SocketAddr = "127.0.0.1:7005".parse().unwrap();
+        let client_address_second_replica: SocketAddr = "127.0.0.1:7006".parse().unwrap();
+
+        let primary = node::Node::primary(
+            &db_path("db_test_primary5"),
+            network_address_primary,
+            vec![network_address_primary.clone(),network_address_replica.clone(), network_address_second_replica.clone()]
+        );
+        spawn_node_tasks(network_address_primary, client_address_primary, primary).await;
+
+        let backup =
+            node::Node::backup(&db_path("db_test_backup6"), network_address_replica, vec![network_address_primary.clone(),network_address_replica.clone(), network_address_second_replica.clone()]);
+        spawn_node_tasks(network_address_replica, client_address_replica, backup).await;
+
+        let second_backup =
+        node::Node::backup(&db_path("db_test_backup7"), network_address_second_replica, vec![network_address_primary.clone(),network_address_replica.clone(), network_address_second_replica.clone()]);
+        spawn_node_tasks(network_address_second_replica, client_address_second_replica, second_backup).await;
+    
+        // set a value on replica, should be forwarded to primary
+        let _ = ClientCommand::Set {
+            key: "k1".to_string(),
+            value: "v1".to_string(),
+        }
+        .send_to(client_address_replica)
+        .await
+        .unwrap();
+
+        // get value on primary
+        let reply = ClientCommand::Get {
+            key: "k1".to_string(),
+        }
+        .send_to(client_address_primary)
+        .await
+        .unwrap();
+        assert!(reply.is_some());
+        assert_eq!("v1".to_string(), reply.unwrap());
+    
+        // get value on replica to make sure it was replicated
+        let reply = ClientCommand::Get {
+            key: "k1".to_string(),
+        }
+        .send_to(client_address_replica)
+        .await
+        .unwrap();
+    
+        assert!(reply.is_some());
+        assert_eq!("v1".to_string(), reply.unwrap());
+    
+        // get value on second replica to make sure it was replicated
+        let reply = ClientCommand::Get {
+            key: "k1".to_string(),
+        }
+        .send_to(client_address_second_replica)
+        .await
+        .unwrap();
+    
+        assert!(reply.is_some());
+        assert_eq!("v1".to_string(), reply.unwrap());
+    }
 
 }
