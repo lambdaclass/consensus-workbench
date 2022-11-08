@@ -14,12 +14,10 @@ pub const CHANNEL_CAPACITY: usize = 1_000;
 #[derive(Parser)]
 #[clap(author, version, about)]
 struct Cli {
-    /// The network port of the node where to send txs.
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = 6100)]
     client_port: u16,
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = 6200)]
     network_port: u16,
-    /// The network address of the node where to send txs.
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
     address: IpAddr,
     /// if running as a replica, this is the address of the primary
@@ -29,16 +27,18 @@ struct Cli {
     /// (eg. when running several nodes in same machine)
     #[clap(short, long)]
     name: Option<String>,
-}
+    #[clap(short, long)]
+    id: Option<usize>
+}   
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let cli = Cli::parse();
 
-    info!(
-        "Node socket for client request {}:{}, network request: {}:{}",
-        cli.address, cli.client_port, cli.address, cli.network_port
-    );
+    // info!(
+    //     "Node socket for client request {}:{}, network request: {}:{}",
+    //     cli.primary_address, cli.primary_client_port, cli.primary_network_port, 
+    // );
 
     simple_logger::SimpleLogger::new()
         .env()
@@ -55,30 +55,16 @@ async fn main() {
             network_address
         );
 
-        info!("Subscribing to primary: {}.", primary_address);
-
-        // TODO: this "Subscribe" message is sent here for testing purposes.
-        //       But it shouldn't be here. We should have an initialization loop
-        //       inside the actual replica node to handle the response, deal with
-        //       errors, and eventually reconnect to a new primary.
-        let mut sender = SimpleSender::new();
-        let subscribe_message: Bytes = bincode::serialize(&Message::Subscribe {
-            address: network_address,
-        })
-        .unwrap()
-        .into();
-        sender.send(primary_address, subscribe_message).await;
-
         Node::backup(
             &db_name(&cli, &format!("replic-{}", cli.network_port)[..]),
             network_address,
-            Vec::new()
-        )
+            vec![primary_address.clone(), network_address]
+    )
     } else {
         info!("Primary: Running as primary on {}.", network_address);
 
         let db_name = db_name(&cli, "primary");
-        Node::primary(&db_name, network_address, Vec::new())
+        Node::primary(&db_name, network_address,  vec![network_address.clone()])
     };
 
     let (_, network_handle, _) = spawn_node_tasks(network_address, client_address, node).await;
@@ -169,7 +155,6 @@ mod tests {
         .unwrap();
 
         sleep(Duration::from_millis(2000)).await;
-        assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
 
         let reply = ClientCommand::Get {
@@ -180,7 +165,6 @@ mod tests {
         .unwrap();
 
         sleep(Duration::from_millis(20)).await;
-        assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
     }
 
@@ -240,7 +224,6 @@ mod tests {
         .send_to(client_address_primary)
         .await
         .unwrap();
-        assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
 
         // get value on primary
@@ -250,7 +233,6 @@ mod tests {
         .send_to(client_address_primary)
         .await
         .unwrap();
-        assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
 
         // get value on replica to make sure it was replicated
@@ -261,7 +243,6 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
     }
 
@@ -345,7 +326,6 @@ mod tests {
         .send_to(client_address_replica)
         .await
         .unwrap();
-        assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
 
         // get value on the second replica to make sure it was replicated
@@ -356,7 +336,6 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
 
 
@@ -404,7 +383,6 @@ mod tests {
         .send_to(client_address_primary)
         .await
         .unwrap();
-        assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
     
         // get value on replica to make sure it was replicated
@@ -415,7 +393,6 @@ mod tests {
         .await
         .unwrap();
     
-        assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
     
         // get value on second replica to make sure it was replicated
@@ -426,7 +403,6 @@ mod tests {
         .await
         .unwrap();
     
-        assert!(reply.is_some());
         assert_eq!("v1".to_string(), reply.unwrap());
     }
 

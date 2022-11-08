@@ -36,7 +36,7 @@ pub enum Message {
 
 const HEARTBEAT_CICLE: usize = 2;
 const PRIMARY_TIMEOUT: usize = 10;
-const CICLE_TIME: u64 = 100;
+const CYCLE_TIME: u64 = 100;
 
 /// Safe serialization helper. Logs on error.
 fn serialize<T: Serialize + fmt::Debug>(message: &T) -> Option<Bytes> {
@@ -60,7 +60,7 @@ impl fmt::Display for Message {
 pub struct Node {
     pub state: State,
     pub store: Store,
-    pub cicle: usize,
+    pub cycle: usize,
     pub view: usize,
     pub peers: Vec<SocketAddr>,
     pub sender: SimpleSender,
@@ -85,7 +85,7 @@ impl Node {
             state: Primary,
             store: Store::new(db_path).unwrap(),
             view: 0,
-            cicle: 0,
+            cycle: 0,
             peers,
             sender: SimpleSender::new(),
         }
@@ -97,7 +97,7 @@ impl Node {
             state: Backup,
             store: Store::new(db_path).unwrap(),
             peers,
-            cicle: 0,
+            cycle: 0,
             view: 0,
             sender: SimpleSender::new(),
         }
@@ -145,6 +145,7 @@ impl Node {
                 Some((message, reply_sender)) = network_receiver.recv() => {
                     info!("[{}] Received network message {}",self.address, message);
 
+                    // PrimaryAddress is a command that get who is at that momment the primary node, so should return a value and not an ack.
                     if let msg @ PrimaryAddress = &message {
                         if let Ok(Some(result)) = self.handle_msg(msg.clone()).await.map_err(|e|e.to_string()){
                             if let Err(error) = reply_sender.send(result) {
@@ -167,27 +168,27 @@ impl Node {
     pub async fn check_timer(&mut self) {
         match self.state {
             State::Primary => {
-                if self.cicle >= HEARTBEAT_CICLE {
+                if self.cycle >= HEARTBEAT_CICLE {
                     self.broadcast_to_others(Heartbeat).await;
-                    self.cicle = 0;
+                    self.cycle = 0;
                 } else {
-                    self.cicle += 1;
+                    self.cycle += 1;
                 }
             }
             State::Backup => {
-                if self.cicle >= PRIMARY_TIMEOUT {
+                if self.cycle >= PRIMARY_TIMEOUT {
                     if self.peers[self.view+1] == self.address{
                         self.state = State::Primary;
                     }
                     self.view += 1;
-                    self.cicle = 0
+                    self.cycle = 0
                 } else {
-                    self.cicle += 1;
+                    self.cycle += 1;
                 }
             }
         }
 
-        tokio::time::sleep(Duration::from_millis(CICLE_TIME)).await;
+        tokio::time::sleep(Duration::from_millis(CYCLE_TIME)).await;
     }
     /// Process each messages coming from clients and foward events to the replicas
     pub async fn handle_msg(&mut self, message: Message) -> Result<Option<String>> {
@@ -201,7 +202,7 @@ impl Node {
                     self.address,
                 ))
                 .await;
-                self.cicle = 0;
+                self.cycle = 0;
                 self.store
                     .write(key.clone().into(), value.clone().into())
                     .await?;
@@ -209,7 +210,7 @@ impl Node {
                 Ok(Some(value))
             }
             (Backup, Replicate(Set { key, value }, reply_to)) => {
-                self.cicle = 0;
+                self.cycle = 0;
                 self.store.write(key.into(), value.clone().into()).await?;
 
                 if let Some(data) = serialize(&value) {
@@ -222,7 +223,7 @@ impl Node {
                 Ok(None)
             }
             (Backup, Heartbeat) => {
-                self.cicle = 0;
+                self.cycle = 0;
                 Ok(None)
             }
             (_, Subscribe { address }) => {
