@@ -30,15 +30,12 @@ pub enum Message {
     // this is just for illustration purposes not being used yet
     Heartbeat,
 
-    /// A request from the new primary to update the view
-    ViewChange,
-
-    /// Get Primary Address
+    /// A request for the actual primary
     PrimaryAddress,
 }
 
-const HEARTBEAT_CICLE: usize = 3;
-const PRIMARY_TIMEOUT: usize = 8;
+const HEARTBEAT_CICLE: usize = 2;
+const PRIMARY_TIMEOUT: usize = 10;
 const CICLE_TIME: u64 = 100;
 
 /// Safe serialization helper. Logs on error.
@@ -68,7 +65,6 @@ pub struct Node {
     pub peers: Vec<SocketAddr>,
     pub sender: SimpleSender,
     address: SocketAddr,
-    view_change_delta_ms: u16,
 }
 
 /// The state of a node viewed as a state-machine.
@@ -92,7 +88,6 @@ impl Node {
             cicle: 0,
             peers,
             sender: SimpleSender::new(),
-            view_change_delta_ms: 100,
         }
     }
 
@@ -105,7 +100,6 @@ impl Node {
             cicle: 0,
             view: 0,
             sender: SimpleSender::new(),
-            view_change_delta_ms: 100,
         }
     }
 }
@@ -113,7 +107,7 @@ impl Node {
 impl Node {
     async fn broadcast_to_others(&mut self, command: Message) {
         let message: Bytes = bincode::serialize(&command).unwrap().into();
-        let peers = &self.peers[self.view..];
+        let peers = &self.peers[self.view+1..];
         let other_peers: Vec<SocketAddr> = peers
             .iter()
             .copied()
@@ -144,28 +138,28 @@ impl Node {
                     };
                 }
                 Some((message, reply_sender)) = network_receiver.recv() => {
-                    info!("Received network message {}", message);
-                    reply_sender.send("ACK".to_string()).unwrap();
-                    self.handle_msg(message.clone()).await.unwrap();
+                    info!("[{}] Received network message {}",self.address, message);
+
+                    if let msg @ PrimaryAddress = &message {
+                        if let Ok(Some(result)) = self.handle_msg(msg.clone()).await.map_err(|e|e.to_string()){
+                            if let Err(error) = reply_sender.send(result) {
+                                error!("failed to send message {:?} response {:?}", msg, error);
+                            };
+                        } else {
+                            error!("failed to handle message {:?}", msg);
+
+                        };
+                    } else {
+                        reply_sender.send("ACK".to_string()).unwrap();
+                        self.handle_msg(message.clone()).await.unwrap();
+                    }
                 }
                 _ = self.check_timer() => ()
             }
         }
     }
 
-    //     Cada nodo tiene una lista con todos los nodos, ordenados de tal manera que el primero es el primer pimary.
-    // Cada nodo tiene una vista que basicamente dice en que posicion de la lista de nodos esta el primary.
-    // En cada ciclo (entre ciclo y ciclo hay un t dentro de un sleep):
-    // Si es primary envio un hearthbeat
-    // Si soy el primer backup (osea vista + 1) checkeo si se paso un tiempo a definir desde el ultimo hearthbeat.
-    // Si efectivamente se paso:
-    // Cambio el estado a primary.
-    // Actualizo la vista y notifico al resto.
     pub async fn check_timer(&mut self) {
-        let timer_duration = self.view_change_delta_ms;
-
-        let delta = Duration::from_millis(timer_duration.into());
-
         match self.state {
             State::Primary => {
                 if self.cicle >= HEARTBEAT_CICLE {
@@ -177,9 +171,10 @@ impl Node {
             }
             State::Backup => {
                 if self.cicle >= PRIMARY_TIMEOUT {
-                    self.state = State::Primary;
+                    if self.peers[self.view+1] == self.address{
+                        self.state = State::Primary;
+                    }
                     self.view += 1;
-                    self.broadcast_to_others(ViewChange).await;
                     self.cicle = 0
                 } else {
                     self.cicle += 1;
