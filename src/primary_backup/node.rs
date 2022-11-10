@@ -28,10 +28,14 @@ pub enum Message {
 
     /// A primary node's heartbeat including the currently known peers
     // this is just for illustration purposes not being used yet
-    Heartbeat,
+    Heartbeat(Vec<SocketAddr>, usize),
 
     /// A request for the actual primary
     PrimaryAddress,
+
+    /// A Message emited from primary to all replicas advising that a
+    /// new node was added with the current peers and the view
+    NewReplica(Vec<SocketAddr>, usize),
 }
 
 const HEARTBEAT_CICLE: usize = 2;
@@ -65,10 +69,11 @@ pub struct Node {
     pub peers: Vec<SocketAddr>,
     pub sender: SimpleSender,
     address: SocketAddr,
+    primary_address: Option<SocketAddr>,
 }
 
 /// The state of a node viewed as a state-machine.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum State {
     Primary,
     Backup,
@@ -79,27 +84,33 @@ use Message::*;
 use State::*;
 
 impl Node {
-    pub fn primary(db_path: &str, address: SocketAddr, peers: Vec<SocketAddr>) -> Self {
+    pub fn primary(
+        db_path: &str,
+        address: SocketAddr,
+        primary_address: Option<SocketAddr>,
+    ) -> Self {
         Self {
             address,
             state: Primary,
             store: Store::new(db_path).unwrap(),
             view: 0,
             cycle: 0,
-            peers,
+            peers: Vec::new(),
             sender: SimpleSender::new(),
+            primary_address,
         }
     }
 
-    pub fn backup(db_path: &str, address: SocketAddr, peers: Vec<SocketAddr>) -> Self {
+    pub fn backup(db_path: &str, address: SocketAddr, primary_address: Option<SocketAddr>) -> Self {
         Self {
             address,
             state: Backup,
             store: Store::new(db_path).unwrap(),
-            peers,
+            peers: Vec::new(),
             cycle: 0,
             view: 0,
             sender: SimpleSender::new(),
+            primary_address,
         }
     }
 }
@@ -107,7 +118,7 @@ impl Node {
 impl Node {
     async fn broadcast_to_others(&mut self, command: Message) {
         let message: Bytes = bincode::serialize(&command).unwrap().into();
-        let peers = &self.peers[self.view+1..];
+        let peers = &self.peers[self.view + 1..];
         let other_peers: Vec<SocketAddr> = peers
             .iter()
             .copied()
@@ -117,7 +128,6 @@ impl Node {
         // forward the command to all replicas and wait for them to respond
         self.sender.broadcast(other_peers, message).await;
     }
-
 
     async fn send_primary(&mut self, command: Message) {
         let message: Bytes = bincode::serialize(&command).unwrap().into();
@@ -129,6 +139,20 @@ impl Node {
         mut network_receiver: Receiver<(Message, oneshot::Sender<String>)>,
         mut client_receiver: Receiver<(ClientCommand, oneshot::Sender<CommandResult>)>,
     ) -> JoinHandle<()> {
+        if self.state == Backup {
+            if let Some(address) = self.primary_address {
+                let msg = Message::Subscribe {
+                    address: self.address,
+                };
+                let message: Bytes = bincode::serialize(&msg).unwrap().into();
+                self.sender.send(address, message).await;
+            } else {
+                panic!("Primary address should be provided");
+            }
+        } else {
+            self.peers = vec![self.address];
+        }
+
         loop {
             tokio::select! {
                 Some((command, reply_sender)) = client_receiver.recv() => {
@@ -153,7 +177,6 @@ impl Node {
                             };
                         } else {
                             error!("failed to handle message {:?}", msg);
-
                         };
                     } else {
                         reply_sender.send("ACK".to_string()).unwrap();
@@ -169,7 +192,8 @@ impl Node {
         match self.state {
             State::Primary => {
                 if self.cycle >= HEARTBEAT_CICLE {
-                    self.broadcast_to_others(Heartbeat).await;
+                    self.broadcast_to_others(Heartbeat(self.peers.clone(), self.view))
+                        .await;
                     self.cycle = 0;
                 } else {
                     self.cycle += 1;
@@ -177,7 +201,7 @@ impl Node {
             }
             State::Backup => {
                 if self.cycle >= PRIMARY_TIMEOUT {
-                    if self.peers[self.view+1] == self.address{
+                    if self.peers[self.view + 1] == self.address {
                         self.state = State::Primary;
                     }
                     self.view += 1;
@@ -218,17 +242,28 @@ impl Node {
                 }
                 Ok(None)
             }
-            (Backup, message @ Command(Set {key: _, value: _})) => {
+            (Backup, message @ Command(Set { key: _, value: _ })) => {
                 self.send_primary(message).await;
                 Ok(None)
             }
-            (Backup, Heartbeat) => {
+            (Backup, Heartbeat(peers, view)) => {
                 self.cycle = 0;
+                self.peers = peers;
+                self.view = view;
                 Ok(None)
             }
-            (_, Subscribe { address }) => {
+            (Primary, Subscribe { address }) => {
                 self.peers.push(address);
                 info!("Peers: {:?}", self.peers);
+
+                self.broadcast_to_others(Message::NewReplica(self.peers.clone(), self.view))
+                    .await;
+
+                Ok(None)
+            }
+            (Backup, NewReplica(peers, view)) => {
+                self.view = view;
+                self.peers = peers;
                 Ok(None)
             }
             (_, Command(Get { key })) => {
@@ -242,10 +277,9 @@ impl Node {
             (_, PrimaryAddress) => Ok(Some(self.get_primary().to_string())),
             _ => Err(anyhow!("Unhandled command")),
         }
-
     }
 
-    fn get_primary(&self) ->  SocketAddr {
+    fn get_primary(&self) -> SocketAddr {
         self.peers[self.view]
     }
 }
