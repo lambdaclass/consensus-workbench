@@ -25,8 +25,6 @@ struct Cli {
     /// (eg. when running several nodes in same machine)
     #[clap(short, long)]
     name: Option<String>,
-    #[clap(short, long)]
-    primary_port: Option<u16>,
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -49,11 +47,11 @@ async fn main() {
         );
 
         let db_name = &db_name(&cli, &format!("replic-{}", cli.network_port)[..]);
-        Node::backup(db_name, network_address, Some(primary_address))
+        Node::backup(db_name, network_address, primary_address)
     } else {
         info!("Primary: Running as primary on {}.", network_address);
         let db_name = db_name(&cli, "primary");
-        Node::primary(&db_name, network_address, None)
+        Node::primary(&db_name, network_address, network_address)
     };
 
     let (_, network_handle, _) = spawn_node_tasks(network_address, client_address, node).await;
@@ -94,7 +92,7 @@ fn db_name(cli: &Cli, default: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node::Message;
+    use crate::node::{Message, State};
     use anyhow::{anyhow, Result};
     use bytes::Bytes;
     use lib::{command::ClientCommand, network::ReliableSender};
@@ -121,7 +119,14 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_only_primary_server() {
         let (network_address, client_address) = get_address_pair(BASE_PORT);
-        run_node(db_path("primary1"), network_address, client_address, None).await;
+        run_node(
+            db_path("primary1"),
+            network_address,
+            client_address,
+            network_address,
+            State::Primary,
+        )
+        .await;
 
         assert_get_msg(KEY, VALUE, client_address, true).await;
         assert_set_msg(KEY, VALUE, client_address).await;
@@ -137,14 +142,16 @@ mod tests {
             db_path("db_test_primary2"),
             network_address_primary,
             client_address_primary,
-            None,
+            network_address_primary,
+            State::Primary,
         )
         .await;
         run_node(
             db_path("db_test_backup2"),
             network_address_replica,
             client_address_replica,
-            Some(network_address_primary),
+            network_address_primary,
+            State::Backup,
         )
         .await;
 
@@ -167,14 +174,16 @@ mod tests {
             db_path("db_test_primary3"),
             network_address_primary,
             client_address_primary,
-            None,
+            network_address_primary,
+            State::Primary,
         )
         .await;
         run_node(
             db_path("db_test_backup3"),
             network_address_replica,
             client_address_replica,
-            Some(network_address_primary),
+            network_address_primary,
+            State::Backup,
         )
         .await;
 
@@ -184,7 +193,7 @@ mod tests {
         node_handle.abort();
 
         //wait to replica to take the lead
-        tokio::time::sleep(Duration::from_millis(1000 * 9)).await;
+        tokio::time::sleep(Duration::from_millis(100 * 9)).await;
 
         //check that the fromer backup is now primary
         let response = Message::PrimaryAddress
@@ -205,21 +214,24 @@ mod tests {
             db_path("db_test_primary4"),
             network_address_primary,
             client_address_primary,
-            None,
+            network_address_primary,
+            State::Primary,
         )
         .await;
         run_node(
             db_path("db_test_backup4"),
             network_address_replica,
             client_address_replica,
-            Some(network_address_primary),
+            network_address_primary,
+            State::Backup,
         )
         .await;
         run_node(
             db_path("db_test_backup5"),
             network_address_second_replica,
             client_address_second_replica,
-            Some(network_address_primary),
+            network_address_primary,
+            State::Backup,
         )
         .await;
 
@@ -258,21 +270,24 @@ mod tests {
             db_path("db_test_primary5"),
             network_address_primary,
             client_address_primary,
-            None,
+            network_address_primary,
+            State::Primary,
         )
         .await;
         run_node(
             db_path("db_test_backup6"),
             network_address_replica,
             client_address_replica,
-            Some(network_address_primary),
+            network_address_primary,
+            State::Backup,
         )
         .await;
         run_node(
             db_path("db_test_backup7"),
             network_address_second_replica,
             client_address_second_replica,
-            Some(network_address_primary),
+            network_address_primary,
+            State::Backup,
         )
         .await;
 
@@ -327,12 +342,12 @@ mod tests {
         db_path: String,
         network_address: SocketAddr,
         client_address: SocketAddr,
-        primary: Option<SocketAddr>,
+        primary: SocketAddr,
+        state: State,
     ) -> (JoinHandle<()>, JoinHandle<()>, JoinHandle<()>) {
-        let node = if let Some(address) = primary {
-            node::Node::backup(&db_path, network_address, Some(address))
-        } else {
-            node::Node::primary(&db_path, network_address, None)
+        let node = match state {
+            State::Primary => node::Node::primary(&db_path, network_address, primary),
+            State::Backup => node::Node::backup(&db_path, network_address, primary),
         };
 
         spawn_node_tasks(network_address, client_address, node).await

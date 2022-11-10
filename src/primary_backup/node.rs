@@ -26,21 +26,19 @@ pub enum Message {
     /// A backup replica request to subcribe to a primary
     Subscribe { address: SocketAddr },
 
-    /// A primary node's heartbeat including the currently known peers
-    // this is just for illustration purposes not being used yet
-    Heartbeat(Vec<SocketAddr>, usize),
+    /// A primary node's heartbeat including the currently known peers this is just for illustration purposes not being used yet
+    Heartbeat,
 
-    /// A request for the actual primary
+    /// A request for the actual primary, used when a new replica wants to join but doesn't know who is the current primary
     PrimaryAddress,
 
-    /// A Message emited from primary to all replicas advising that a
-    /// new node was added with the current peers and the view
+    /// A Message emitted from primary to all replicas informing that a new node was added with the current peers and the view
     NewReplica(Vec<SocketAddr>, usize),
 }
 
 const HEARTBEAT_CICLE: usize = 2;
 const PRIMARY_TIMEOUT: usize = 10;
-const CYCLE_TIME: u64 = 100;
+const CICLE_LENGTH: u64 = 100;
 
 /// Safe serialization helper. Logs on error.
 fn serialize<T: Serialize + fmt::Debug>(message: &T) -> Option<Bytes> {
@@ -64,12 +62,23 @@ impl fmt::Display for Message {
 pub struct Node {
     pub state: State,
     pub store: Store,
-    pub cycle: usize,
-    pub view: usize,
+
+    /// peers is a vector with the addresses of the nodes that integrate the system ordered by the time that they integrate it.
     pub peers: Vec<SocketAddr>,
+
+    /// cycle represents:
+    ///     Primary: Number of seconds since the last time the node send a heartbeat to the replicas.
+    ///     Backup: Number of seconds since the last received heartbeat.
+    pub cycle: usize,
+
+    /// view number refers to the current primary on peers
+    pub view: usize,
+
     pub sender: SimpleSender,
     address: SocketAddr,
-    primary_address: Option<SocketAddr>,
+
+    /// address of the primary node, used by backups nodes to subscribe at start up
+    primary_address: SocketAddr,
 }
 
 /// The state of a node viewed as a state-machine.
@@ -84,11 +93,7 @@ use Message::*;
 use State::*;
 
 impl Node {
-    pub fn primary(
-        db_path: &str,
-        address: SocketAddr,
-        primary_address: Option<SocketAddr>,
-    ) -> Self {
+    pub fn primary(db_path: &str, address: SocketAddr, primary_address: SocketAddr) -> Self {
         Self {
             address,
             state: Primary,
@@ -101,7 +106,7 @@ impl Node {
         }
     }
 
-    pub fn backup(db_path: &str, address: SocketAddr, primary_address: Option<SocketAddr>) -> Self {
+    pub fn backup(db_path: &str, address: SocketAddr, primary_address: SocketAddr) -> Self {
         Self {
             address,
             state: Backup,
@@ -140,17 +145,13 @@ impl Node {
         mut client_receiver: Receiver<(ClientCommand, oneshot::Sender<CommandResult>)>,
     ) -> JoinHandle<()> {
         if self.state == Backup {
-            if let Some(address) = self.primary_address {
-                let msg = Message::Subscribe {
-                    address: self.address,
-                };
-                let message: Bytes = bincode::serialize(&msg).unwrap().into();
-                self.sender.send(address, message).await;
-            } else {
-                panic!("Primary address should be provided");
-            }
+            let msg = Message::Subscribe {
+                address: self.address,
+            };
+            let message: Bytes = bincode::serialize(&msg).unwrap().into();
+            self.sender.send(self.primary_address, message).await;
         } else {
-            self.peers = vec![self.address];
+            self.peers = vec![self.primary_address];
         }
 
         loop {
@@ -188,17 +189,20 @@ impl Node {
         }
     }
 
-    pub async fn check_timer(&mut self) {
+    // Checks sync betwen primary and replicas.
+    async fn check_timer(&mut self) {
         match self.state {
+            // Primary waits HEARTBEAT_CICLE * CICLE_LENGTH miliseconds to send a new heartbeat to replicas
             State::Primary => {
                 if self.cycle >= HEARTBEAT_CICLE {
-                    self.broadcast_to_others(Heartbeat(self.peers.clone(), self.view))
-                        .await;
+                    self.broadcast_to_others(Heartbeat).await;
                     self.cycle = 0;
                 } else {
                     self.cycle += 1;
                 }
             }
+            // Backup waits at least PRIMARY TIMEOUT * cycle milliseconds to change view
+            // If Backup is next in line (peers[view + 1]) and the view change then it becomes the new primary
             State::Backup => {
                 if self.cycle >= PRIMARY_TIMEOUT {
                     if self.peers[self.view + 1] == self.address {
@@ -212,7 +216,7 @@ impl Node {
             }
         }
 
-        tokio::time::sleep(Duration::from_millis(CYCLE_TIME)).await;
+        tokio::time::sleep(Duration::from_millis(CICLE_LENGTH)).await;
     }
     /// Process each messages coming from clients and foward events to the replicas
     pub async fn handle_msg(&mut self, message: Message) -> Result<Option<String>> {
@@ -246,10 +250,8 @@ impl Node {
                 self.send_primary(message).await;
                 Ok(None)
             }
-            (Backup, Heartbeat(peers, view)) => {
+            (Backup, Heartbeat) => {
                 self.cycle = 0;
-                self.peers = peers;
-                self.view = view;
                 Ok(None)
             }
             (Primary, Subscribe { address }) => {
