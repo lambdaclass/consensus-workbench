@@ -98,6 +98,7 @@ mod tests {
     use lib::{command::ClientCommand, network::ReliableSender};
     use std::fs;
     use tokio::time::Duration;
+    use tokio_retry::{strategy::FixedInterval, Retry};
 
     // since logger is meant to be initialized once and tests run in parallel,
     // run this before anything because otherwise it errors out
@@ -192,15 +193,8 @@ mod tests {
         //kill primary
         node_handle.abort();
 
-        //wait to replica to take the lead
-        tokio::time::sleep(Duration::from_millis(100 * 9)).await;
-
         //check that the fromer backup is now primary
-        let response = Message::PrimaryAddress
-            .send_to(network_address_replica)
-            .await
-            .unwrap();
-        assert_eq!(response, network_address_replica.to_string());
+        assert_eventually_equals(network_address_replica).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -244,12 +238,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(1000 * 9)).await;
 
         //check that the fromer backup is now primary
-        let response = Message::PrimaryAddress
-            .send_to(network_address_replica)
-            .await
-            .unwrap();
-
-        assert_eq!(response, network_address_replica.to_string());
+        assert_eventually_equals(network_address_replica).await;
 
         // set a value on new primary
         assert_set_msg(KEY, VALUE, client_address_replica).await;
@@ -358,5 +347,21 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port + 1),
         )
+    }
+
+    /// Send Get commands to the given address with delayed retries to give it time for a transaction
+    /// to propagate. Fails if the expected value isn't read after 20 seconds.
+    async fn assert_eventually_equals(address: SocketAddr) {
+        let retries = FixedInterval::from_millis(100).take(200);
+        let reply = Retry::spawn(retries, || async {
+            let reply = Message::PrimaryAddress.send_to(address).await.unwrap();
+            if reply == address.to_string() {
+                Ok(())
+            } else {
+                Err(())
+            }
+        })
+        .await;
+        assert!(reply.is_ok());
     }
 }
