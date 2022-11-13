@@ -1,21 +1,6 @@
 # Consensus workbench
 Proof of concept Rust implementations for various distributed systems protocols.
 
-## Example usage
-
-    # run a single-node server
-    cargo run --bin single_node
-
-    # on a separate shell, send key/value commands to the server
-    cargo run --bin client -- set v1 hello
-    cargo run --bin client -- get v1
-
-The default log level is `INFO`, to change it set the `RUST_LOG` environment variable before running. Possible values are `OFF`, `ERROR`, `WARN`, `INFO`, `DEBUG` and `TRACE`.
-
-See the specific implementation directories for details on how to run each of them.
-
-## Implementations
-
 Each sub-directory contains an implementation of a key/value store with specific replication or consensus strategies.
 
 1. [Single node server](/src/single_node)
@@ -29,6 +14,20 @@ Each sub-directory contains an implementation of a key/value store with specific
 5. HotStuff (TODO)
 6. Narwhal+Tusk (TODO)
 6. Narwhal+Bullshark (TODO)
+
+
+## Example usage
+
+    # run a single-node server
+    cargo run --bin single_node
+
+    # on a separate shell, send key/value commands to the server
+    cargo run --bin client -- set v1 hello
+    cargo run --bin client -- get v1
+
+The default log level is `INFO`, to change it set the `RUST_LOG` environment variable before running. Possible values are `OFF`, `ERROR`, `WARN`, `INFO`, `DEBUG` and `TRACE`.
+
+See the specific implementation directories for details on how to run each of them.
 
 ## Suggested reads
 
