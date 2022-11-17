@@ -12,10 +12,13 @@ pub const CHANNEL_CAPACITY: usize = 1_000;
 #[derive(Parser)]
 #[clap(author, version, about)]
 struct Cli {
+    /// The client port of the node where to send txs.
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = 6100)]
     client_port: u16,
+    /// The network port where other nodes sends msg.
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = 6200)]
     network_port: u16,
+    /// Node Address
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
     address: IpAddr,
     /// if running as a replica, this is the address of the primary

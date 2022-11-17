@@ -36,7 +36,7 @@ pub enum Message {
     NewReplica(Vec<SocketAddr>, usize),
 }
 
-const HEARTBEAT_CICLE: usize = 2;
+const HEARTBEAT_CYCLE: usize = 2;
 const PRIMARY_TIMEOUT: usize = 10;
 const CICLE_LENGTH: u64 = 100;
 
@@ -194,7 +194,7 @@ impl Node {
         match self.state {
             // Primary waits HEARTBEAT_CICLE * CICLE_LENGTH miliseconds to send a new heartbeat to replicas
             State::Primary => {
-                if self.cycle >= HEARTBEAT_CICLE {
+                if self.cycle >= HEARTBEAT_CYCLE {
                     self.broadcast_to_others(Heartbeat).await;
                     self.cycle = 0;
                 } else {
