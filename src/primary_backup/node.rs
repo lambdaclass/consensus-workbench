@@ -38,7 +38,7 @@ pub enum Message {
 
 const HEARTBEAT_CYCLE: usize = 2;
 const PRIMARY_TIMEOUT: usize = 10;
-const CICLE_LENGTH: u64 = 100;
+const CIYLE_LENGTH: u64 = 100;
 
 /// Safe serialization helper. Logs on error.
 fn serialize<T: Serialize + fmt::Debug>(message: &T) -> Option<Bytes> {
@@ -192,7 +192,7 @@ impl Node {
     // Checks sync betwen primary and replicas.
     async fn check_timer(&mut self) {
         match self.state {
-            // Primary waits HEARTBEAT_CICLE * CICLE_LENGTH miliseconds to send a new heartbeat to replicas
+            // Primary waits HEARTBEAT_CYCLE * CYCLE_LENGTH miliseconds to send a new heartbeat to replicas
             State::Primary => {
                 if self.cycle >= HEARTBEAT_CYCLE {
                     self.broadcast_to_others(Heartbeat).await;
@@ -216,7 +216,7 @@ impl Node {
             }
         }
 
-        tokio::time::sleep(Duration::from_millis(CICLE_LENGTH)).await;
+        tokio::time::sleep(Duration::from_millis(CIYLE_LENGTH)).await;
     }
     /// Process each messages coming from clients and foward events to the replicas
     pub async fn handle_msg(&mut self, message: Message) -> Result<Option<String>> {
