@@ -1,25 +1,24 @@
-use bytes::Bytes;
+use crate::node::Node;
 use clap::Parser;
 use lib::network::Receiver;
-use lib::network::SimpleSender;
 use log::info;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::task::JoinHandle;
 
-use crate::node::{Message, Node};
-
 mod node;
+
 pub const CHANNEL_CAPACITY: usize = 1_000;
 
 #[derive(Parser)]
 #[clap(author, version, about)]
 struct Cli {
-    /// The network port of the node where to send txs.
+    /// The client port of the node where to send txs.
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = 6100)]
     client_port: u16,
+    /// The network port where other nodes sends msg.
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = 6200)]
     network_port: u16,
-    /// The network address of the node where to send txs.
+    /// Node Address
     #[clap(short, long, value_parser, value_name = "UINT", default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
     address: IpAddr,
     /// if running as a replica, this is the address of the primary
@@ -35,19 +34,14 @@ struct Cli {
 async fn main() {
     let cli = Cli::parse();
 
-    info!(
-        "Node socket for client request {}:{}, network request: {}:{}",
-        cli.address, cli.client_port, cli.address, cli.network_port
-    );
-
     simple_logger::SimpleLogger::new()
         .env()
         .with_level(log::LevelFilter::Info)
         .init()
         .unwrap();
 
-    let network_address = SocketAddr::new(cli.address, cli.client_port);
-    let client_address = SocketAddr::new(cli.address, cli.network_port);
+    let network_address = SocketAddr::new(cli.address, cli.network_port);
+    let client_address = SocketAddr::new(cli.address, cli.client_port);
 
     let node = if let Some(primary_address) = cli.primary {
         info!(
@@ -55,29 +49,12 @@ async fn main() {
             network_address
         );
 
-        info!("Subscribing to primary: {}.", primary_address);
-
-        // TODO: this "Subscribe" message is sent here for testing purposes.
-        //       But it shouldn't be here. We should have an initialization loop
-        //       inside the actual replica node to handle the response, deal with
-        //       errors, and eventually reconnect to a new primary.
-        let mut sender = SimpleSender::new();
-        let subscribe_message: Bytes = bincode::serialize(&Message::Subscribe {
-            address: network_address,
-        })
-        .unwrap()
-        .into();
-        sender.send(primary_address, subscribe_message).await;
-
-        Node::backup(
-            &db_name(&cli, &format!("replic-{}", cli.network_port)[..]),
-            network_address,
-        )
+        let db_name = &db_name(&cli, &format!("replic-{}", cli.network_port)[..]);
+        Node::backup(db_name, network_address, primary_address)
     } else {
         info!("Primary: Running as primary on {}.", network_address);
-
         let db_name = db_name(&cli, "primary");
-        Node::primary(&db_name, network_address)
+        Node::primary(&db_name, network_address, network_address)
     };
 
     let (_, network_handle, _) = spawn_node_tasks(network_address, client_address, node).await;
@@ -118,9 +95,13 @@ fn db_name(cli: &Cli, default: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lib::command::ClientCommand;
+    use crate::node::{Message, State};
+    use anyhow::{anyhow, Result};
+    use bytes::Bytes;
+    use lib::{command::ClientCommand, network::ReliableSender};
     use std::fs;
-    use tokio::time::{sleep, Duration};
+    use tokio::time::Duration;
+    use tokio_retry::{strategy::FixedInterval, Retry};
 
     // since logger is meant to be initialized once and tests run in parallel,
     // run this before anything because otherwise it errors out
@@ -135,130 +116,255 @@ mod tests {
         fs::remove_dir_all(db_path("")).unwrap_or_default();
     }
 
-    fn db_path(suffix: &str) -> String {
-        format!(".db_test/{suffix}")
-    }
+    pub const KEY: &str = "KEY";
+    pub const VALUE: &str = "VALUE";
+    pub const BASE_PORT: u16 = 6780;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_only_primary_server() {
-        let network_address: SocketAddr = "127.0.0.1:6680".parse().unwrap();
-        let client_address: SocketAddr = "127.0.0.1:6780".parse().unwrap();
-        let node = node::Node::primary(&db_path("primary1"), network_address);
-        spawn_node_tasks(network_address, client_address, node).await;
+        let (network_address, client_address) = get_address_pair(BASE_PORT);
+        run_node(
+            db_path("primary1"),
+            network_address,
+            client_address,
+            network_address,
+            State::Primary,
+        )
+        .await;
 
-        sleep(Duration::from_millis(2000)).await;
-
-        let reply = ClientCommand::Get {
-            key: "k1".to_string(),
-        }
-        .send_to(client_address)
-        .await
-        .unwrap();
-        assert!(reply.is_none());
-
-        let reply = ClientCommand::Set {
-            key: "k1".to_string(),
-            value: "v1".to_string(),
-        }
-        .send_to(client_address)
-        .await
-        .unwrap();
-
-        sleep(Duration::from_millis(2000)).await;
-        assert!(reply.is_some());
-        assert_eq!("v1".to_string(), reply.unwrap());
-
-        let reply = ClientCommand::Get {
-            key: "k1".to_string(),
-        }
-        .send_to(client_address)
-        .await
-        .unwrap();
-
-        sleep(Duration::from_millis(20)).await;
-        assert!(reply.is_some());
-        assert_eq!("v1".to_string(), reply.unwrap());
+        assert_get_msg(KEY, VALUE, client_address, true).await;
+        assert_set_msg(KEY, VALUE, client_address).await;
+        assert_get_msg(KEY, VALUE, client_address, false).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_replicated_server() {
-        let network_address_primary: SocketAddr = "127.0.0.1:6880".parse().unwrap();
-        let client_address_primary: SocketAddr = "127.0.0.1:6881".parse().unwrap();
+        let (network_address_primary, client_address_primary) = get_address_pair(BASE_PORT + 2);
+        let (network_address_replica, client_address_replica) = get_address_pair(BASE_PORT + 4);
 
-        let network_address_replica: SocketAddr = "127.0.0.1:6980".parse().unwrap();
-        let client_address_replica: SocketAddr = "127.0.0.1:6981".parse().unwrap();
-
-        let primary = node::Node::primary(&db_path("db_test_primary2"), network_address_primary);
-        spawn_node_tasks(network_address_primary, client_address_primary, primary).await;
-
-        let backup = node::Node::backup(&db_path("db_test_backup2"), network_address_replica);
-        spawn_node_tasks(network_address_replica, client_address_replica, backup).await;
-
-        // TODO: this "Subscribe" message is sent here for testing purposes.
-        //       But it shouldn't be here. We should have an initialization loop
-        //       inside the actual replica node to handle the response, deal with
-        //       errors, and eventually reconnect to a new primary.
-        let mut sender = SimpleSender::new();
-        let subscribe_message: Bytes = bincode::serialize(&Message::Subscribe {
-            address: network_address_replica,
-        })
-        .unwrap()
-        .into();
-        sender
-            .send(network_address_primary, subscribe_message)
-            .await;
-
-        sleep(Duration::from_millis(10)).await;
-
-        // get null value
-        let reply = ClientCommand::Get {
-            key: "k1".to_string(),
-        }
-        .send_to(client_address_primary)
-        .await
-        .unwrap();
-        assert!(reply.is_none());
-
-        // set a value on primary
-        let reply = ClientCommand::Set {
-            key: "k1".to_string(),
-            value: "v1".to_string(),
-        }
-        .send_to(client_address_primary)
-        .await
-        .unwrap();
-        assert!(reply.is_some());
-        assert_eq!("v1".to_string(), reply.unwrap());
-
-        // get value on primary
-        let reply = ClientCommand::Get {
-            key: "k1".to_string(),
-        }
-        .send_to(client_address_primary)
-        .await
-        .unwrap();
-        assert!(reply.is_some());
-        assert_eq!("v1".to_string(), reply.unwrap());
-
-        // get value on replica to make sure it was replicated
-        let reply = ClientCommand::Get {
-            key: "k1".to_string(),
-        }
-        .send_to(client_address_replica)
-        .await
-        .unwrap();
-
-        // FIX Node currently is not replicating. Uncomment after fix
-        assert!(reply.is_some());
-        assert_eq!("v1".to_string(), reply.unwrap());
-
-        // should fail since replica should not respond to set commands
-        let reply = ClientCommand::Set {
-            key: "k3".to_string(),
-            value: "_".to_string(),
-        }
-        .send_to(client_address_replica)
+        run_node(
+            db_path("db_test_primary2"),
+            network_address_primary,
+            client_address_primary,
+            network_address_primary,
+            State::Primary,
+        )
         .await;
-        assert!(reply.is_err());
+        run_node(
+            db_path("db_test_backup2"),
+            network_address_replica,
+            client_address_replica,
+            network_address_primary,
+            State::Backup,
+        )
+        .await;
+
+        // get value on primary should be None
+        assert_get_msg(KEY, VALUE, client_address_primary, true).await;
+        // set value on primary
+        assert_set_msg(KEY, VALUE, client_address_primary).await;
+        // get value on primary
+        assert_get_msg(KEY, VALUE, client_address_primary, false).await;
+        // get value on replica to make sure it was replicated
+        assert_get_msg(KEY, VALUE, client_address_replica, false).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_backup_change_to_primary() {
+        let (network_address_primary, client_address_primary) = get_address_pair(BASE_PORT + 6);
+        let (network_address_replica, client_address_replica) = get_address_pair(BASE_PORT + 8);
+
+        let (node_handle, _, _) = run_node(
+            db_path("db_test_primary3"),
+            network_address_primary,
+            client_address_primary,
+            network_address_primary,
+            State::Primary,
+        )
+        .await;
+        run_node(
+            db_path("db_test_backup3"),
+            network_address_replica,
+            client_address_replica,
+            network_address_primary,
+            State::Backup,
+        )
+        .await;
+
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+
+        //kill primary
+        node_handle.abort();
+
+        //check that the fromer backup is now primary
+        assert_eventually_equals(network_address_replica).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_backup_change_to_primary_backup_replicate_to_replicas() {
+        let (network_address_primary, client_address_primary) = get_address_pair(BASE_PORT + 10);
+        let (network_address_replica, client_address_replica) = get_address_pair(BASE_PORT + 12);
+        let (network_address_second_replica, client_address_second_replica) =
+            get_address_pair(BASE_PORT + 14);
+
+        let (node_handle, _, _) = run_node(
+            db_path("db_test_primary4"),
+            network_address_primary,
+            client_address_primary,
+            network_address_primary,
+            State::Primary,
+        )
+        .await;
+        run_node(
+            db_path("db_test_backup4"),
+            network_address_replica,
+            client_address_replica,
+            network_address_primary,
+            State::Backup,
+        )
+        .await;
+        run_node(
+            db_path("db_test_backup5"),
+            network_address_second_replica,
+            client_address_second_replica,
+            network_address_primary,
+            State::Backup,
+        )
+        .await;
+
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+
+        //kill primary
+        node_handle.abort();
+
+        //wait to replica to take the lead
+        tokio::time::sleep(Duration::from_millis(1000 * 9)).await;
+
+        //check that the fromer backup is now primary
+        assert_eventually_equals(network_address_replica).await;
+
+        // set a value on new primary
+        assert_set_msg(KEY, VALUE, client_address_replica).await;
+        // get value on new primary
+        assert_get_msg(KEY, VALUE, client_address_replica, false).await;
+        // get value on the second replica to make sure it was replicated
+        assert_get_msg(KEY, VALUE, client_address_second_replica, false).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_send_set_command_to_backup_is_forwarded_to_primary() {
+        let (network_address_primary, client_address_primary) = get_address_pair(BASE_PORT + 16);
+        let (network_address_replica, client_address_replica) = get_address_pair(BASE_PORT + 18);
+        let (network_address_second_replica, client_address_second_replica) =
+            get_address_pair(BASE_PORT + 20);
+
+        run_node(
+            db_path("db_test_primary5"),
+            network_address_primary,
+            client_address_primary,
+            network_address_primary,
+            State::Primary,
+        )
+        .await;
+        run_node(
+            db_path("db_test_backup6"),
+            network_address_replica,
+            client_address_replica,
+            network_address_primary,
+            State::Backup,
+        )
+        .await;
+        run_node(
+            db_path("db_test_backup7"),
+            network_address_second_replica,
+            client_address_second_replica,
+            network_address_primary,
+            State::Backup,
+        )
+        .await;
+
+        // set a value on replica, should be forwarded to primary
+        assert_set_msg(KEY, VALUE, client_address_replica).await;
+        // get value on primary
+        assert_get_msg(KEY, VALUE, client_address_primary, false).await;
+        // get value on replica to make sure it was replicated
+        assert_get_msg(KEY, VALUE, client_address_replica, false).await;
+        // get value on second replica to make sure it was replicated
+        assert_get_msg(KEY, VALUE, client_address_second_replica, false).await;
+    }
+
+    fn db_path(suffix: &str) -> String {
+        format!(".db_test/{suffix}")
+    }
+
+    impl Message {
+        pub async fn send_to(self, address: SocketAddr) -> Result<String> {
+            let mut sender = ReliableSender::new();
+
+            let message: Bytes = bincode::serialize(&(self))?.into();
+            let reply_handler = sender.send(address, message).await;
+
+            let response = reply_handler.await?;
+            bincode::deserialize(&response).map_err(|e| anyhow!(e))
+        }
+    }
+
+    async fn assert_get_msg(key: &str, value: &str, address: SocketAddr, none: bool) {
+        let command = ClientCommand::Get {
+            key: key.to_string(),
+        };
+        match (command.send_to(address).await, none) {
+            (Ok(Some(val)), false) => assert_eq!(value, val),
+            (Ok(val), true) => assert!(val.is_none()),
+            _ => panic!("Error"),
+        }
+    }
+
+    async fn assert_set_msg(key: &str, value: &str, address: SocketAddr) {
+        let command = ClientCommand::Set {
+            key: key.to_string(),
+            value: value.to_string(),
+        };
+        if let Ok(Some(msg_result)) = command.send_to(address).await {
+            assert_eq!(value, msg_result);
+        }
+    }
+
+    async fn run_node(
+        db_path: String,
+        network_address: SocketAddr,
+        client_address: SocketAddr,
+        primary: SocketAddr,
+        state: State,
+    ) -> (JoinHandle<()>, JoinHandle<()>, JoinHandle<()>) {
+        let node = match state {
+            State::Primary => node::Node::primary(&db_path, network_address, primary),
+            State::Backup => node::Node::backup(&db_path, network_address, primary),
+        };
+
+        spawn_node_tasks(network_address, client_address, node).await
+    }
+
+    fn get_address_pair(port: u16) -> (SocketAddr, SocketAddr) {
+        (
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port + 1),
+        )
+    }
+
+    /// Send Get commands to the given address with delayed retries to give it time for a transaction
+    /// to propagate. Fails if the expected value isn't read after 20 seconds.
+    async fn assert_eventually_equals(address: SocketAddr) {
+        let retries = FixedInterval::from_millis(100).take(200);
+        let reply = Retry::spawn(retries, || async {
+            let reply = Message::PrimaryAddress.send_to(address).await.unwrap();
+            if reply == address.to_string() {
+                Ok(())
+            } else {
+                Err(())
+            }
+        })
+        .await;
+        assert!(reply.is_ok());
     }
 }
